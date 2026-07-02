@@ -39,15 +39,10 @@ function M.setup(opts)
   })
 end
 
----Open the telescope session picker.
----@param opts { cwd?: string, adapter?: string }|nil
+---Open the session picker (backend configurable: telescope or fzf-lua).
+---@param opts { cwd?: string, adapter?: string, backend?: string }|nil
 function M.pick_sessions(opts)
-  local ok, telescope = pcall(require, 'telescope')
-  if not ok then
-    vim.notify('conductor: telescope.nvim is required for the session picker', vim.log.levels.ERROR)
-    return
-  end
-  telescope.extensions.conductor.sessions(opts)
+  require('conductor.picker').open(opts)
 end
 
 ---Resume a session in a terminal.

@@ -13,6 +13,8 @@ local defaults = {
     },
   },
   picker = {
+    ---Picker backend: 'telescope' or 'fzf-lua'.
+    backend = 'telescope',
     ---Maximum number of log entries rendered in the previewer.
     preview_max_entries = 200,
     ---Truncate each preview message body to this many lines (0 = no limit).

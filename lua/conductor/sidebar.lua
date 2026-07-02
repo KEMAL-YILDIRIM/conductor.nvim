@@ -7,7 +7,10 @@ local state = {
   winid = nil, ---@type integer|nil
   ---Maps sidebar line numbers to instance ids.
   line_to_instance = {}, ---@type table<integer, integer>
+  ---Maps sidebar line numbers to external session entries.
+  line_to_external = {}, ---@type table<integer, ConductorExternalSession>
   autocmd_id = nil, ---@type integer|nil
+  refresh_timer = nil, ---@type uv.uv_timer_t|nil
 }
 
 local status_icons = {
@@ -44,28 +47,45 @@ function M.render()
   end
   local supervisor = require 'conductor.supervisor'
   local instances = supervisor.list()
+  local externals = require('conductor.external').list_cached()
 
   local lines = { ' Conductor', '' }
   local highlights = {} ---@type { line: integer, group: string }[]
   state.line_to_instance = {}
+  state.line_to_external = {}
 
-  if #instances == 0 then
+  if #instances == 0 and #externals == 0 then
     lines[#lines + 1] = '  no live sessions'
     lines[#lines + 1] = ''
     lines[#lines + 1] = '  n: new session'
     lines[#lines + 1] = '  q: close'
   else
-    for _, instance in ipairs(instances) do
-      local icon = status_icons[instance.status] or '?'
-      local line = ('%s %s'):format(icon, instance.name)
-      lines[#lines + 1] = line
-      state.line_to_instance[#lines] = instance.id
-      highlights[#highlights + 1] = { line = #lines - 1, group = status_highlights[instance.status] or 'Normal' }
-      local detail = instance.status
-      if instance.status == 'exited' and instance.exit_code then
-        detail = ('exited (%d)'):format(instance.exit_code)
+    if #instances > 0 then
+      lines[#lines + 1] = ' Managed'
+      for _, instance in ipairs(instances) do
+        local icon = status_icons[instance.status] or '?'
+        lines[#lines + 1] = ('%s %s'):format(icon, instance.name)
+        state.line_to_instance[#lines] = instance.id
+        highlights[#highlights + 1] = { line = #lines - 1, group = status_highlights[instance.status] or 'Normal' }
+        local detail = instance.status
+        if instance.status == 'exited' and instance.exit_code then
+          detail = ('exited (%d)'):format(instance.exit_code)
+        end
+        lines[#lines + 1] = ('   %s'):format(detail)
       end
-      lines[#lines + 1] = ('   %s'):format(detail)
+    end
+    if #externals > 0 then
+      if #instances > 0 then
+        lines[#lines + 1] = ''
+      end
+      lines[#lines + 1] = ' External (terminal)'
+      for _, external in ipairs(externals) do
+        local icon = status_icons[external.status] or '?'
+        lines[#lines + 1] = ('%s %s'):format(icon, external.name)
+        state.line_to_external[#lines] = external
+        highlights[#highlights + 1] = { line = #lines - 1, group = status_highlights[external.status] or 'Normal' }
+        lines[#lines + 1] = ('   %s · pid %d'):format(external.status, external.pid)
+      end
     end
     lines[#lines + 1] = ''
     lines[#lines + 1] = ' <CR>: open chat  n: new'
@@ -103,6 +123,15 @@ local function setup_keymaps()
     local instance = instance_at_cursor()
     if instance then
       require('conductor.chatlog').open(instance)
+      return
+    end
+    -- External session: open its log file read-only (live view is not possible
+    -- without attaching; the session belongs to a terminal pi process).
+    local line = vim.api.nvim_win_get_cursor(state.winid)[1]
+    local external = state.line_to_external[line] or state.line_to_external[line - 1]
+    if external and external.session_file then
+      vim.cmd.vsplit(vim.fn.fnameescape(external.session_file))
+      vim.bo.readonly = true
     end
   end, vim.tbl_extend('force', options, { desc = 'Conductor: open chat' }))
 
@@ -171,6 +200,17 @@ function M.open()
     })
   end
 
+  -- Poll presence files for external sessions while the sidebar is open.
+  -- Managed instances remain purely event-driven.
+  if not state.refresh_timer then
+    state.refresh_timer = vim.uv.new_timer()
+    state.refresh_timer:start(2000, 2000, vim.schedule_wrap(function()
+      if window_valid() then
+        M.render()
+      end
+    end))
+  end
+
   M.render()
 end
 
@@ -179,6 +219,11 @@ function M.close()
     vim.api.nvim_win_close(state.winid, true)
   end
   state.winid = nil
+  if state.refresh_timer then
+    state.refresh_timer:stop()
+    state.refresh_timer:close()
+    state.refresh_timer = nil
+  end
 end
 
 function M.toggle()

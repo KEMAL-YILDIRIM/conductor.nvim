@@ -9,7 +9,8 @@ Currently supports the [pi coding agent](https://github.com/earendil-works/pi-mo
 - **Phase 1 (done)**: session discovery, telescope picker with parsed conversation-log preview, resume in terminal
 - **Phase 2 (done)**: RPC supervisor — spawn/manage `pi --mode rpc` processes, live sidebar with per-session status (streaming / needs input / idle / error), streaming chat buffer, agent dialog forwarding
 - **Phase 3 (done)**: richer chat view — collapsible tool calls with captured output, tool navigation, persistent multi-line input bar
-- **Phase 4**: adapter API stabilization, external-session attach, fzf-lua backend, image support
+- **Phase 4 (done)**: backend-neutral picker core + fzf-lua backend, external-session visibility via the bundled `conductor-presence` pi extension
+- **Later**: image support, richer external-session interaction (steering via socket)
 
 ## Requirements
 
@@ -63,6 +64,20 @@ In the sidebar (`:Conductor panel`):
 
 Status icons: running · needs input (agent finished or asked a question) · idle · error · exited. When an agent extension asks a question (select/confirm/input), conductor surfaces it via `vim.ui.select`/`vim.ui.input` and marks the instance *needs input*.
 
+### External sessions (pi running in a terminal)
+
+Install the bundled presence extension so pi processes running outside Neovim appear in the sidebar with live status:
+
+```bash
+cp pi-extension/conductor-presence.ts ~/.pi/agent/extensions/
+```
+
+External sessions are shown in an `External (terminal)` section (status polled every 2s while the sidebar is open; dead processes are pruned automatically). `<CR>` opens their session log read-only — prompting into an external TUI is out of scope for now.
+
+### fzf-lua backend
+
+Set `picker.backend = 'fzf-lua'` to use fzf-lua instead of telescope. Same actions: `<CR>` resume, `<C-a>` attach managed, `<C-o>` open raw log. Falls back to telescope if fzf-lua is not installed.
+
 ### Chat view
 
 The chat view is a markdown log window with a persistent input bar below it.
@@ -102,8 +117,12 @@ require('conductor').setup {
     },
   },
   picker = {
+    backend = 'telescope', -- or 'fzf-lua'
     preview_max_entries = 200,
     preview_max_lines_per_entry = 20,
+  },
+  sidebar = {
+    width = 36,
   },
   terminal = {
     backend = 'snacks', -- or 'split'
