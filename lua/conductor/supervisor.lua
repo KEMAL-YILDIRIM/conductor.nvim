@@ -19,7 +19,7 @@ local M = {}
 ---@field status 'starting'|'idle'|'streaming'|'needs_input'|'error'|'exited'
 ---@field handle ConductorInstanceHandle|nil
 ---@field pending_ui table|nil the blocking extension_ui_request, if any
----@field log ConductorLogEntry[] accumulated conversation (for the chat buffer)
+---@field log ConductorChatEntry[] accumulated conversation (for the chat buffer)
 ---@field partial string in-flight assistant text
 ---@field chat_bufnr integer|nil
 ---@field exit_code integer|nil
@@ -71,14 +71,20 @@ local function on_event(instance, event)
       instance.log[#instance.log + 1] = { role = 'assistant', text = instance.partial }
       instance.partial = ''
     end
-    local label = event.summary ~= '' and ('%s: %s'):format(event.name, event.summary) or event.name
-    instance.log[#instance.log + 1] = { role = 'system', text = '[tool] ' .. label }
+    instance.log[#instance.log + 1] = { role = 'tool', text = event.name, summary = event.summary or '', running = true }
     chatlog.refresh(instance)
   elseif event.type == 'tool_end' then
-    if event.is_error then
-      instance.log[#instance.log + 1] = { role = 'system', text = ('[tool] %s failed'):format(event.name) }
-      chatlog.refresh(instance)
+    -- Find the most recent running tool entry for this tool.
+    for index = #instance.log, 1, -1 do
+      local entry = instance.log[index]
+      if entry.role == 'tool' and entry.running and entry.text == event.name then
+        entry.running = false
+        entry.is_error = event.is_error
+        entry.output = event.output or ''
+        break
+      end
     end
+    chatlog.refresh(instance)
   elseif event.type == 'ui_request' then
     instance.pending_ui = event.request
     set_status(instance, 'needs_input')

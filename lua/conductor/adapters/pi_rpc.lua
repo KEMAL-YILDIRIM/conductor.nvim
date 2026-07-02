@@ -60,7 +60,17 @@ local function translate(decoded, emit, pending)
   elseif kind == 'tool_execution_start' then
     emit { type = 'tool_start', name = decoded.toolName, summary = summarize_args(decoded.args) }
   elseif kind == 'tool_execution_end' then
-    emit { type = 'tool_end', name = decoded.toolName, is_error = decoded.isError == true }
+    local output = ''
+    if type(decoded.result) == 'table' and type(decoded.result.content) == 'table' then
+      local parts = {}
+      for _, block in ipairs(decoded.result.content) do
+        if type(block) == 'table' and block.type == 'text' and type(block.text) == 'string' then
+          parts[#parts + 1] = block.text
+        end
+      end
+      output = table.concat(parts, '\n')
+    end
+    emit { type = 'tool_end', name = decoded.toolName, is_error = decoded.isError == true, output = output }
   elseif kind == 'extension_ui_request' then
     local method = decoded.method
     if method == 'notify' then

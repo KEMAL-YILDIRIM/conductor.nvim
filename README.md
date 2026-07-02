@@ -8,8 +8,8 @@ Currently supports the [pi coding agent](https://github.com/earendil-works/pi-mo
 
 - **Phase 1 (done)**: session discovery, telescope picker with parsed conversation-log preview, resume in terminal
 - **Phase 2 (done)**: RPC supervisor — spawn/manage `pi --mode rpc` processes, live sidebar with per-session status (streaming / needs input / idle / error), streaming chat buffer, agent dialog forwarding
-- **Phase 3**: richer chat view (markdown render, tool-call folding, image support)
-- **Phase 4**: adapter API stabilization, external-session attach, fzf-lua backend
+- **Phase 3 (done)**: richer chat view — collapsible tool calls with captured output, tool navigation, persistent multi-line input bar
+- **Phase 4**: adapter API stabilization, external-session attach, fzf-lua backend, image support
 
 ## Requirements
 
@@ -63,7 +63,30 @@ In the sidebar (`:Conductor panel`):
 
 Status icons: running · needs input (agent finished or asked a question) · idle · error · exited. When an agent extension asks a question (select/confirm/input), conductor surfaces it via `vim.ui.select`/`vim.ui.input` and marks the instance *needs input*.
 
-In the chat buffer: `i` — send prompt, `<C-c>` — abort agent, `q` — close.
+### Chat view
+
+The chat view is a markdown log window with a persistent input bar below it.
+
+Log window:
+
+| Key | Action |
+|---|---|
+| `i` | Focus the input bar (insert mode) |
+| `<CR>` | Expand/collapse the tool call under (or above) the cursor |
+| `]t` / `[t` | Jump to next / previous tool call |
+| `<C-c>` | Abort the running agent |
+| `q` | Close the chat view |
+
+Tool calls render as `▶ bash \`echo hi\`` while collapsed; expanding shows the captured output in a fenced code block. Running tools show `…`, failed tools `✗`.
+
+Input bar:
+
+| Key | Action |
+|---|---|
+| `<CR>` | Send prompt (normal or insert mode) |
+| `<S-CR>` | Insert newline |
+| `<C-k>` | Focus the log window |
+| `q` | Close the chat view (normal mode) |
 
 The previewer shows the **parsed conversation log** — user prompts and assistant replies only — not the raw JSONL, so you can quickly assess which session you're looking at.
 
