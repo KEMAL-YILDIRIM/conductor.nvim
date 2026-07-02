@@ -5,15 +5,27 @@ local log_parser = require 'conductor.log_parser'
 ---@type ConductorAdapter
 local M = { name = 'pi' }
 
+---Metadata cache keyed by file path, invalidated by mtime.
+---@type table<string, { mtime: integer, meta: ConductorSessionMeta }>
+local meta_cache = {}
+
 local function options()
   return require('conductor.config').options.adapters.pi
 end
 
+---Resolve the session storage root using pi's own precedence:
+---1. explicit `adapters.pi.sessions_dir` config
+---2. $PI_CODING_AGENT_DIR/sessions (pi's agent-dir redirect)
+---3. ~/.pi/agent/sessions (pi default)
 ---@return string
 local function sessions_root()
   local configured = options().sessions_dir
-  if configured then
+  if configured and configured ~= '' then
     return vim.fs.normalize(configured)
+  end
+  local agent_dir = vim.env.PI_CODING_AGENT_DIR
+  if agent_dir and agent_dir ~= '' then
+    return vim.fs.normalize(agent_dir .. '/sessions')
   end
   return vim.fs.normalize(vim.fn.expand '~/.pi/agent/sessions')
 end
@@ -43,7 +55,14 @@ function M.list_sessions(opts)
       for _, file in ipairs(files) do
         local stat = vim.uv.fs_stat(file)
         if stat then
-          local meta = log_parser.scan_meta(file)
+          local cached = meta_cache[file]
+          local meta
+          if cached and cached.mtime == stat.mtime.sec then
+            meta = cached.meta
+          else
+            meta = log_parser.scan_meta(file)
+            meta_cache[file] = { mtime = stat.mtime.sec, meta = meta }
+          end
           local cwd = meta.cwd or decode_cwd_dir(vim.fn.fnamemodify(project_dir, ':t'))
           if not opts.cwd or vim.fs.normalize(cwd):lower() == vim.fs.normalize(opts.cwd):lower() then
             local first_line = meta.first_user_text and meta.first_user_text:gsub('\n.*', '') or '(empty session)'

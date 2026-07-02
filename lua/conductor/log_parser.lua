@@ -94,11 +94,55 @@ function M.parse(path)
   return meta, entries
 end
 
----Cheap metadata-only scan (stops early once name + first message are known).
+---Cheap metadata-only scan for session listings.
+---Streams the file but only JSON-decodes the header, session_info lines, and
+---the first user message; messages are counted via string matching. This keeps
+---listing hundreds of multi-megabyte session files fast.
 ---@param path string
 ---@return ConductorSessionMeta
 function M.scan_meta(path)
-  local meta, _ = M.parse(path)
+  ---@type ConductorSessionMeta
+  local meta = { message_count = 0 }
+
+  local file = io.open(path, 'r')
+  if not file then
+    return meta
+  end
+
+  for line in file:lines() do
+    if line ~= '' then
+      if line:find('"type":"session"', 1, true) then
+        local ok, entry = pcall(vim.json.decode, line)
+        if ok and type(entry) == 'table' then
+          meta.id = entry.id
+          meta.cwd = entry.cwd
+          meta.created = entry.timestamp
+        end
+      elseif line:find('"type":"session_info"', 1, true) then
+        local ok, entry = pcall(vim.json.decode, line)
+        if ok and type(entry) == 'table' and entry.name then
+          meta.name = entry.name
+        end
+      elseif line:find('"type":"message"', 1, true) then
+        if line:find('"role":"user"', 1, true) then
+          meta.message_count = meta.message_count + 1
+          if not meta.first_user_text then
+            local ok, entry = pcall(vim.json.decode, line)
+            if ok and type(entry) == 'table' and type(entry.message) == 'table' then
+              local text = content_to_text(entry.message.content)
+              if text ~= '' then
+                meta.first_user_text = text
+              end
+            end
+          end
+        elseif line:find('"role":"assistant"', 1, true) then
+          meta.message_count = meta.message_count + 1
+        end
+      end
+    end
+  end
+  file:close()
+
   return meta
 end
 
