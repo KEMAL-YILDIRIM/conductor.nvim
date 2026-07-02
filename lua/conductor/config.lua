@@ -18,6 +18,10 @@ local defaults = {
     ---Truncate each preview message body to this many lines (0 = no limit).
     preview_max_lines_per_entry = 20,
   },
+  sidebar = {
+    ---Sidebar width in columns.
+    width = 36,
+  },
   terminal = {
     ---How to open the resumed session: 'snacks' (snacks.nvim terminal) or 'split'.
     backend = 'snacks',

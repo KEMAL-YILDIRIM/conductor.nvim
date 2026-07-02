@@ -89,6 +89,10 @@ end
 
 M.parse_log = log_parser.parse
 
+M.spawn = function(opts)
+  return require('conductor.adapters.pi_rpc').spawn(opts)
+end
+
 ---@param session ConductorSession
 ---@return string[]
 function M.resume_cmd(session)

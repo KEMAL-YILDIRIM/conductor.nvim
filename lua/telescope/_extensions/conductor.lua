@@ -133,6 +133,28 @@ local function session_picker(opts)
         map('i', '<C-o>', open_log)
         map('n', '<C-o>', open_log)
 
+        local attach_managed = function()
+          local entry = action_state.get_selected_entry()
+          actions.close(prompt_bufnr)
+          if entry then
+            local session = entry.value
+            local instance, spawn_error = require('conductor.supervisor').spawn {
+              adapter = session.adapter,
+              cwd = session.cwd,
+              session_path = session.path,
+              name = session.name,
+            }
+            if instance then
+              require('conductor.sidebar').open()
+              require('conductor.chatlog').open(instance)
+            else
+              vim.notify('conductor: ' .. (spawn_error or 'spawn failed'), vim.log.levels.ERROR)
+            end
+          end
+        end
+        map('i', '<C-a>', attach_managed)
+        map('n', '<C-a>', attach_managed)
+
         return true
       end,
     })

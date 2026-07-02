@@ -16,13 +16,24 @@ function M.setup(opts)
       M.pick_sessions()
     elseif subcommand == 'here' then
       M.pick_sessions { cwd = vim.fn.getcwd() }
+    elseif subcommand == 'panel' then
+      require('conductor.sidebar').toggle()
+    elseif subcommand == 'new' then
+      local name = command.fargs[2]
+      local instance, spawn_error = require('conductor.supervisor').spawn { name = name }
+      if instance then
+        require('conductor.sidebar').open()
+        require('conductor.chatlog').open(instance)
+      else
+        vim.notify('conductor: ' .. (spawn_error or 'spawn failed'), vim.log.levels.ERROR)
+      end
     else
       vim.notify(('conductor: unknown subcommand %q'):format(subcommand), vim.log.levels.ERROR)
     end
   end, {
-    nargs = '?',
+    nargs = '*',
     complete = function()
-      return { 'sessions', 'here' }
+      return { 'sessions', 'here', 'panel', 'new' }
     end,
     desc = 'Conductor: manage AI agent sessions',
   })
