@@ -1,0 +1,302 @@
+*conductor.txt*        Manage AI agent sessions from Neovim
+
+==============================================================================
+CONDUCTOR                                              *conductor* *conductor.nvim*
+
+Manage AI agent conversations from Neovim. Discover sessions, preview
+conversation logs in a fuzzy picker, browse them in a persistent panel,
+resume them in a terminal, or attach them as live managed instances with a
+streaming chat view.
+
+Currently supports the pi coding agent (https://github.com/earendil-works/pi-mono);
+the adapter interface is designed so other harnesses (Claude Code, OpenCode,
+...) can be added.
+
+  1. Requirements ............ |conductor-requirements|
+  2. Setup ................... |conductor-setup|
+  3. Commands ................ |conductor-commands|
+  4. Session browser ......... |conductor-browser|
+  5. Session picker .......... |conductor-picker|
+  6. Live sessions sidebar ... |conductor-sidebar|
+  7. Chat view ............... |conductor-chat|
+  8. External sessions ....... |conductor-external|
+  9. Configuration ........... |conductor-configuration|
+ 10. Lua API ................. |conductor-api|
+
+==============================================================================
+1. REQUIREMENTS                                        *conductor-requirements*
+
+- Neovim 0.10+
+- telescope.nvim (https://github.com/nvim-telescope/telescope.nvim)
+- snacks.nvim (optional, preferred terminal backend)
+- fzf-lua (optional, alternative picker backend)
+- `pi` executable on `$PATH`
+
+==============================================================================
+2. SETUP                                                      *conductor-setup*
+
+With lazy.nvim: >lua
+
+    {
+      'conductor.nvim',
+      dependencies = { 'nvim-telescope/telescope.nvim' },
+      cmd = 'Conductor',
+      keys = {
+        { '<leader>aa', '<cmd>Conductor browse<cr>',     desc = 'Agent session browser (cwd)' },
+        { '<leader>aA', '<cmd>Conductor browse_all<cr>', desc = 'Agent session browser (all)' },
+        { '<leader>af', '<cmd>Conductor sessions<cr>',   desc = 'Agent sessions picker (all)' },
+        { '<leader>ah', '<cmd>Conductor here<cr>',       desc = 'Agent sessions picker (cwd)' },
+        { '<leader>ap', '<cmd>Conductor panel<cr>',      desc = 'Agent panel (live sessions)' },
+        { '<leader>an', '<cmd>Conductor new<cr>',        desc = 'Agent new session' },
+      },
+      opts = {},
+    }
+<
+Or manually: >lua
+
+    require('conductor').setup {}
+<
+==============================================================================
+3. COMMANDS                                *conductor-commands* *:Conductor*
+
+All functionality is exposed through a single command with subcommands.
+Running `:Conductor` with no arguments is equivalent to `:Conductor browse`.
+
+                                                            *:Conductor-browse*
+:Conductor browse
+    Toggle the session browser: a persistent list panel on the left showing
+    sessions for the current working directory, with the conversation
+    rendered in the main window. See |conductor-browser|.
+
+                                                        *:Conductor-browse_all*
+:Conductor browse_all
+    Same as `browse`, but lists sessions across all projects.
+
+                                                          *:Conductor-sessions*
+:Conductor sessions
+    Open the fuzzy picker with sessions from all projects.
+    See |conductor-picker|.
+
+                                                              *:Conductor-here*
+:Conductor here
+    Open the fuzzy picker with sessions for the current working directory.
+
+                                                             *:Conductor-panel*
+:Conductor panel
+    Toggle the live sessions sidebar showing managed and external instances
+    with per-session status. See |conductor-sidebar|.
+
+                                                               *:Conductor-new*
+:Conductor new [name]
+    Spawn a new managed agent instance (headless RPC), open the sidebar and
+    its chat view. An optional [name] labels the instance.
+
+==============================================================================
+4. SESSION BROWSER                                          *conductor-browser*
+
+Opened with |:Conductor-browse| (or `browse_all`). A persistent left panel
+lists sessions; moving the cursor over a session renders its full
+conversation — including collapsible tool calls — in the main window on the
+right.
+
+Session list panel:                                    *conductor-browser-keys*
+
+    j / k       Navigate sessions; the content panel follows
+    <CR>        Focus the content panel
+    r           Resume the session in a terminal
+    a           Attach as a managed instance (headless RPC + chat)
+    o           Open the raw session `.jsonl` file
+    c           Toggle cwd-only / all-projects filter
+    R           Refresh the session list
+    q           Close the browser
+
+Content panel:
+
+    <CR>        Expand/collapse the tool call under the cursor
+    ]t          Jump to the next tool call
+    [t          Jump to the previous tool call
+    q           Close the browser
+
+==============================================================================
+5. SESSION PICKER                                            *conductor-picker*
+
+Opened with |:Conductor-sessions| or |:Conductor-here|. The previewer shows
+the parsed conversation log — user prompts and assistant replies only, not
+raw JSONL — so you can quickly assess which session you are looking at.
+
+Picker mappings:                                        *conductor-picker-keys*
+
+    <CR>        Resume the session in a terminal (`pi --session <path>`)
+    <C-a>       Attach the session as a managed instance
+                (headless RPC + chat buffer)
+    <C-o>       Open the raw session `.jsonl` file
+
+fzf-lua backend                                             *conductor-fzf-lua*
+
+Set `picker.backend = 'fzf-lua'` in |conductor-configuration| to use fzf-lua
+instead of telescope. Same actions: `<CR>` resume, `<C-a>` attach managed,
+`<C-o>` open raw log. Falls back to telescope if fzf-lua is not installed.
+
+==============================================================================
+6. LIVE SESSIONS SIDEBAR                                    *conductor-sidebar*
+
+Opened with |:Conductor-panel|. Shows managed agent instances (and external
+ones, see |conductor-external|) with per-session status.
+
+Sidebar mappings:                                      *conductor-sidebar-keys*
+
+    <CR>        Open the chat buffer for the instance under the cursor
+    p           Send a prompt without opening the chat
+    n           Spawn a new instance
+    x           Kill the instance and remove it
+    q           Close the sidebar
+
+Status icons:                                        *conductor-sidebar-status*
+
+    running       Agent is streaming a response
+    needs input   Agent finished or asked a question
+    idle          Waiting for a prompt
+    error         Something went wrong
+    exited        Process terminated
+
+When an agent extension asks a question (select/confirm/input), conductor
+surfaces it via |vim.ui.select|/|vim.ui.input| and marks the instance
+"needs input".
+
+==============================================================================
+7. CHAT VIEW                                                   *conductor-chat*
+
+The chat view is a markdown log window with a persistent multi-line input
+bar below it. It opens when attaching a session (`a` in the browser,
+`<C-a>` in the picker), pressing `<CR>` in the sidebar, or via
+|:Conductor-new|.
+
+Log window mappings:                                      *conductor-chat-keys*
+
+    i           Focus the input bar (insert mode)
+    <CR>        Expand/collapse the tool call under (or above) the cursor
+    ]t          Jump to the next tool call
+    [t          Jump to the previous tool call
+    <C-c>       Abort the running agent
+    q           Close the chat view
+
+Input bar mappings:                                      *conductor-input-keys*
+
+    <CR>        Send the prompt (normal or insert mode)
+    <S-CR>      Insert a newline (insert mode)
+    <C-k>       Focus the log window
+    q           Close the chat view (normal mode)
+
+Tool calls render collapsed as `▶ bash `echo hi``; expanding shows the
+captured output in a fenced code block. Running tools show `…`, failed
+tools `✗`.
+
+==============================================================================
+8. EXTERNAL SESSIONS                                       *conductor-external*
+
+pi processes running outside Neovim (in a regular terminal) can appear in
+the sidebar with live status. Install the bundled presence extension: >bash
+
+    cp pi-extension/conductor-presence.ts ~/.pi/agent/extensions/
+<
+External sessions are shown in an `External (terminal)` section. Status is
+polled every 2 seconds while the sidebar is open; dead processes are pruned
+automatically. `<CR>` opens their session log read-only — prompting into an
+external TUI is out of scope for now.
+
+==============================================================================
+9. CONFIGURATION                     *conductor-configuration* *conductor-setup()*
+
+Call `require('conductor').setup(opts)`. Defaults: >lua
+
+    require('conductor').setup {
+      default_adapter = 'pi',
+      adapters = {
+        pi = {
+          cmd = 'pi',          -- executable used to resume sessions
+          sessions_dir = nil,  -- defaults to ~/.pi/agent/sessions
+        },
+      },
+      picker = {
+        backend = 'telescope',           -- or 'fzf-lua'
+        preview_max_entries = 200,       -- max log entries in the previewer
+        preview_max_lines_per_entry = 20, -- truncate bodies (0 = no limit)
+      },
+      sidebar = {
+        width = 36,            -- sidebar width in columns
+      },
+      browser = {
+        width = 44,            -- session-list panel width in columns
+      },
+      terminal = {
+        backend = 'snacks',    -- 'snacks' (snacks.nvim) or 'split'
+        snacks_win = { position = 'right', width = 0.5 },
+      },
+    }
+<
+Options:                                                    *conductor-options*
+
+default_adapter                                   *conductor-default_adapter*
+    Type: `string`, default: `'pi'`
+    Adapter used by pickers and commands.
+
+adapters.pi.cmd                                       *conductor-adapters.cmd*
+    Type: `string`, default: `'pi'`
+    Executable used to resume and spawn sessions.
+
+adapters.pi.sessions_dir                     *conductor-adapters.sessions_dir*
+    Type: `string|nil`, default: `nil`
+    Session storage root. When nil, `~/.pi/agent/sessions` is used.
+
+picker.backend                                      *conductor-picker.backend*
+    Type: `string`, default: `'telescope'`
+    Picker backend: `'telescope'` or `'fzf-lua'`.
+
+picker.preview_max_entries                              *conductor-picker.max*
+    Type: `number`, default: `200`
+    Maximum number of log entries rendered in the previewer.
+
+picker.preview_max_lines_per_entry                    *conductor-picker.lines*
+    Type: `number`, default: `20`
+    Truncate each preview message body to this many lines (0 = no limit).
+
+sidebar.width                                        *conductor-sidebar.width*
+    Type: `number`, default: `36`
+    Sidebar width in columns.
+
+browser.width                                        *conductor-browser.width*
+    Type: `number`, default: `44`
+    Session-list panel width in columns.
+
+terminal.backend                                  *conductor-terminal.backend*
+    Type: `string`, default: `'snacks'`
+    How resumed sessions are opened: `'snacks'` (snacks.nvim terminal,
+    falls back to split when unavailable) or `'split'`.
+
+terminal.snacks_win                            *conductor-terminal.snacks_win*
+    Type: `table`, default: `{ position = 'right', width = 0.5 }`
+    Window options passed to `Snacks.terminal`.
+
+==============================================================================
+10. LUA API                                                     *conductor-api*
+
+conductor.setup({opts})                                    *conductor.setup()*
+    Initialize the plugin, register adapters and create the |:Conductor|
+    command. {opts} is merged with the defaults, see
+    |conductor-configuration|.
+
+conductor.pick_sessions({opts})                    *conductor.pick_sessions()*
+    Open the session picker. {opts} is an optional table: >lua
+
+        require('conductor').pick_sessions {
+          cwd = vim.fn.getcwd(),  -- filter to a directory (nil = all)
+          adapter = 'pi',         -- adapter name
+          backend = 'fzf-lua',    -- override picker backend
+        }
+<
+conductor.resume({session})                               *conductor.resume()*
+    Resume a session in a terminal using the configured terminal backend.
+    {session} is a `ConductorSession` as produced by the adapters.
+
+==============================================================================
+vim:tw=78:ts=8:noet:ft=help:norl:

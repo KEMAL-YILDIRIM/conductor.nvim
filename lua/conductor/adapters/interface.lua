@@ -32,9 +32,13 @@
 ---@class ConductorAdapter
 ---@field name string
 ---@field list_sessions fun(opts?: { cwd?: string }): ConductorSession[] discover sessions (all projects, or filtered to cwd)
+---@field list_sessions_async nil|fun(opts?: { cwd?: string }, callback: fun(ok: boolean, sessions_or_error: ConductorSession[]|string)) same as list_sessions, off the main thread (conductor.threadwork); falls back to list_sessions when absent
 ---@field parse_log fun(path: string): ConductorSessionMeta, ConductorLogEntry[] parse a session file for previews
+---@field parse_log_async nil|fun(path: string, callback: fun(ok: boolean, result_or_error: { meta: ConductorSessionMeta, entries: ConductorLogEntry[] }|string)) same as parse_log, off the main thread; falls back to parse_log when absent
 ---@field resume_cmd fun(session: ConductorSession): string[] argv to resume the session in a terminal
 ---@field spawn nil|fun(opts: { cwd?: string, session_path?: string, name?: string, ephemeral?: boolean, on_event: fun(event: table), on_exit: fun(code: integer) }): ConductorInstanceHandle
+---@field sessions_root nil|fun(): string session storage root (required for fs ops)
+---@field fs nil|{ copy: fun(root: string, session: ConductorSession, cwd: string, name?: string): boolean, string|nil, move: fun(root: string, session: ConductorSession, cwd: string): boolean, string|nil, delete: fun(path: string): boolean, string|nil, create: fun(root: string, cwd: string, name?: string): boolean, string|nil, rename: fun(path: string, name: string): boolean, string|nil } optional file-level session ops enabling the editable browser
 
 local M = {}
 

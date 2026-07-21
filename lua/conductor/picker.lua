@@ -46,6 +46,31 @@ function M.list(opts)
   return adapter.list_sessions { cwd = opts.cwd }, adapter
 end
 
+---List sessions off the main thread when the adapter supports it (falls back
+---to the blocking `M.list` otherwise, e.g. adapters without a threadwork path).
+---@param opts { cwd?: string, adapter?: string }|nil
+---@param callback fun(sessions: ConductorSession[], adapter: ConductorAdapter)
+function M.list_async(opts, callback)
+  opts = opts or {}
+  local conductor_config = require('conductor.config').options
+  local interface = require 'conductor.adapters.interface'
+  local adapter = interface.get(opts.adapter or conductor_config.default_adapter)
+
+  if not adapter.list_sessions_async then
+    callback(adapter.list_sessions { cwd = opts.cwd }, adapter)
+    return
+  end
+
+  adapter.list_sessions_async({ cwd = opts.cwd }, function(ok, sessions_or_error)
+    if ok then
+      callback(sessions_or_error, adapter)
+    else
+      vim.notify('conductor: ' .. tostring(sessions_or_error), vim.log.levels.ERROR)
+      callback({}, adapter)
+    end
+  end)
+end
+
 ---Rendered preview lines for a session (mtime-cached).
 ---@param session ConductorSession
 ---@param adapter ConductorAdapter
@@ -69,6 +94,42 @@ function M.preview_lines(session, adapter)
   return lines
 end
 
+---Same as `M.preview_lines`, parsing off the main thread when the adapter
+---supports it (large multi-MB session logs can take tens of ms to parse).
+---@param session ConductorSession
+---@param adapter ConductorAdapter
+---@param callback fun(lines: string[])
+function M.preview_lines_async(session, adapter, callback)
+  local stat = vim.uv.fs_stat(session.path)
+  local mtime = stat and stat.mtime.sec or 0
+  local cached = preview_cache[session.path]
+  if cached and cached.mtime == mtime then
+    callback(cached.lines)
+    return
+  end
+
+  if not adapter.parse_log_async then
+    callback(M.preview_lines(session, adapter))
+    return
+  end
+
+  adapter.parse_log_async(session.path, function(ok, result_or_error)
+    if not ok then
+      vim.notify('conductor: ' .. tostring(result_or_error), vim.log.levels.ERROR)
+      callback {}
+      return
+    end
+    local conductor_config = require('conductor.config').options
+    local log_parser = require 'conductor.log_parser'
+    local lines = log_parser.render_preview(result_or_error.meta, result_or_error.entries, {
+      max_entries = conductor_config.picker.preview_max_entries,
+      max_lines_per_entry = conductor_config.picker.preview_max_lines_per_entry,
+    })
+    preview_cache[session.path] = { mtime = mtime, lines = lines }
+    callback(lines)
+  end)
+end
+
 --- Shared actions ----------------------------------------------------------
 
 ---Resume in a terminal (default action).
@@ -77,7 +138,7 @@ function M.action_resume(session)
   require('conductor').resume(session)
 end
 
----Attach as a managed RPC instance.
+---Attach as a managed RPC instance (opened in its own tab).
 ---@param session ConductorSession
 function M.action_attach(session)
   local instance, spawn_error = require('conductor.supervisor').spawn {
@@ -87,8 +148,21 @@ function M.action_attach(session)
     name = session.name,
   }
   if instance then
+    -- Open the managed view on a dedicated tab so it never disturbs the
+    -- current (e.g. browser) layout. The sidebar + chat windows then fill
+    -- the fresh tab; drop the empty scratch window `:tabnew` created.
+    vim.cmd 'tabnew'
+    local scratch_win = vim.api.nvim_get_current_win()
+    local scratch_buf = vim.api.nvim_get_current_buf()
     require('conductor.sidebar').open()
     require('conductor.chatlog').open(instance)
+    if
+      vim.api.nvim_win_is_valid(scratch_win)
+      and vim.api.nvim_win_get_buf(scratch_win) == scratch_buf
+      and vim.api.nvim_buf_get_name(scratch_buf) == ''
+    then
+      pcall(vim.api.nvim_win_close, scratch_win, true)
+    end
   else
     vim.notify('conductor: ' .. (spawn_error or 'spawn failed'), vim.log.levels.ERROR)
   end

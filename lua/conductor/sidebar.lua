@@ -47,7 +47,22 @@ function M.render()
   end
   local supervisor = require 'conductor.supervisor'
   local instances = supervisor.list()
-  local externals = require('conductor.external').list_cached()
+  local all_externals = require('conductor.external').list_cached()
+
+  -- Dedupe: a session that has been attached as a managed instance must not
+  -- also appear in the External section. A session lives on the panel once.
+  local managed_session_paths = {}
+  for _, instance in ipairs(instances) do
+    if instance.session_path then
+      managed_session_paths[instance.session_path] = true
+    end
+  end
+  local externals = {}
+  for _, external in ipairs(all_externals) do
+    if not (external.session_file and managed_session_paths[external.session_file]) then
+      externals[#externals + 1] = external
+    end
+  end
 
   local lines = { ' Conductor', '' }
   local highlights = {} ---@type { line: integer, group: string }[]
@@ -89,7 +104,7 @@ function M.render()
     end
     lines[#lines + 1] = ''
     lines[#lines + 1] = ' <CR>: open chat  n: new'
-    lines[#lines + 1] = ' p: prompt  x: kill  q: close'
+    lines[#lines + 1] = ' p: prompt  s: stop  x: kill  q: close'
   end
 
   vim.bo[state.bufnr].modifiable = true
@@ -117,32 +132,50 @@ local function instance_at_cursor()
 end
 
 local function setup_keymaps()
+  local config = require 'conductor.config'
   local options = { buffer = state.bufnr, nowait = true }
 
-  vim.keymap.set('n', '<CR>', function()
+  config.map('sidebar', 'open_chat', 'n', function()
     local instance = instance_at_cursor()
     if instance then
       require('conductor.chatlog').open(instance)
       return
     end
-    -- External session: open its log file read-only (live view is not possible
-    -- without attaching; the session belongs to a terminal pi process).
+    -- External session: attach as a managed RPC instance so it becomes a live,
+    -- interactive chat instead of a static read-only log dump. If we've already
+    -- attached to this session file, just reopen its chat view.
     local line = vim.api.nvim_win_get_cursor(state.winid)[1]
     local external = state.line_to_external[line] or state.line_to_external[line - 1]
     if external and external.session_file then
-      vim.cmd.vsplit(vim.fn.fnameescape(external.session_file))
-      vim.bo.readonly = true
+      local supervisor = require 'conductor.supervisor'
+      for _, existing in ipairs(supervisor.list()) do
+        if existing.session_path == external.session_file then
+          require('conductor.chatlog').open(existing)
+          return
+        end
+      end
+      local attached, spawn_error = supervisor.spawn {
+        adapter = 'pi',
+        cwd = external.cwd,
+        session_path = external.session_file,
+        name = external.name,
+      }
+      if attached then
+        require('conductor.chatlog').open(attached)
+      else
+        vim.notify('conductor: ' .. (spawn_error or 'attach failed'), vim.log.levels.ERROR)
+      end
     end
   end, vim.tbl_extend('force', options, { desc = 'Conductor: open chat' }))
 
-  vim.keymap.set('n', 'p', function()
+  config.map('sidebar', 'prompt', 'n', function()
     local instance = instance_at_cursor()
     if instance then
       require('conductor.chatlog').input_prompt(instance)
     end
   end, vim.tbl_extend('force', options, { desc = 'Conductor: prompt instance' }))
 
-  vim.keymap.set('n', 'n', function()
+  config.map('sidebar', 'new', 'n', function()
     vim.ui.input({ prompt = 'session name (empty = auto): ' }, function(name)
       if name == nil then
         return
@@ -150,18 +183,30 @@ local function setup_keymaps()
       local instance, spawn_error = require('conductor.supervisor').spawn { name = name ~= '' and name or nil }
       if not instance then
         vim.notify('conductor: ' .. (spawn_error or 'spawn failed'), vim.log.levels.ERROR)
+        return
       end
+      -- Open the new instance's chat in the shared chat window.
+      require('conductor.chatlog').open(instance)
     end)
   end, vim.tbl_extend('force', options, { desc = 'Conductor: new session' }))
 
-  vim.keymap.set('n', 'x', function()
+  config.map('sidebar', 'stop', 'n', function()
+    local instance = instance_at_cursor()
+    if instance then
+      require('conductor.supervisor').abort(instance)
+    end
+  end, vim.tbl_extend('force', options, { desc = 'Conductor: stop agent' }))
+
+  config.map('sidebar', 'kill', 'n', function()
     local instance = instance_at_cursor()
     if instance then
       require('conductor.supervisor').remove(instance)
     end
   end, vim.tbl_extend('force', options, { desc = 'Conductor: kill instance' }))
 
-  vim.keymap.set('n', 'q', M.close, vim.tbl_extend('force', options, { desc = 'Conductor: close sidebar' }))
+  config.map('sidebar', 'close', 'n', M.close, vim.tbl_extend('force', options, { desc = 'Conductor: close sidebar' }))
+
+  require('conductor.help').attach(state.bufnr)
 end
 
 function M.open()
@@ -180,7 +225,14 @@ function M.open()
     setup_keymaps()
   end
 
+  -- If the all-sessions browser already owns the current tab, open the live
+  -- sessions panel on a fresh tab so the two layouts don't fight over the
+  -- same window space. Otherwise carve a left split out of the current tab.
   local width = require('conductor.config').options.sidebar.width
+  if require('conductor.browser').is_open() then
+    -- Fresh tab: empty main window on the right, sidebar split off its left.
+    vim.cmd 'tabnew'
+  end
   vim.cmd(('topleft %dvsplit'):format(width))
   state.winid = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(state.winid, state.bufnr)

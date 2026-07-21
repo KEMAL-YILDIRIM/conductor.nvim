@@ -28,8 +28,10 @@ Currently supports the [pi coding agent](https://github.com/earendil-works/pi-mo
   dependencies = { 'nvim-telescope/telescope.nvim' },
   cmd = 'Conductor',
   keys = {
-    { '<leader>af', '<cmd>Conductor sessions<cr>', desc = 'Agent sessions (all)' },
-    { '<leader>ah', '<cmd>Conductor here<cr>', desc = 'Agent sessions (cwd)' },
+    { '<leader>aa', '<cmd>Conductor browse<cr>', desc = 'Agent session browser (cwd)' },
+    { '<leader>aA', '<cmd>Conductor browse_all<cr>', desc = 'Agent session browser (all)' },
+    { '<leader>af', '<cmd>Conductor sessions<cr>', desc = 'Agent sessions picker (all)' },
+    { '<leader>ah', '<cmd>Conductor here<cr>', desc = 'Agent sessions picker (cwd)' },
     { '<leader>ap', '<cmd>Conductor panel<cr>', desc = 'Agent panel (live sessions)' },
     { '<leader>an', '<cmd>Conductor new<cr>', desc = 'Agent new session' },
   },
@@ -41,10 +43,54 @@ Currently supports the [pi coding agent](https://github.com/earendil-works/pi-mo
 
 | Command | Description |
 |---|---|
-| `:Conductor sessions` | Pick from all sessions across projects |
+| `:Conductor browse` | Toggle the session browser (left list panel, cwd sessions) |
+| `:Conductor browse_all` | Toggle the session browser across all projects |
+| `:Conductor sessions` | Pick from all sessions across projects (fuzzy picker) |
 | `:Conductor here` | Pick from sessions for the current working directory |
 | `:Conductor panel` | Toggle the live sessions sidebar |
 | `:Conductor new [name]` | Spawn a new managed agent instance |
+
+### Session browser (`:Conductor browse`)
+
+A persistent left panel lists sessions grouped by project directory (current
+working directory by default). Moving the cursor over a session renders its
+full conversation — including collapsible tool calls — in the main window on
+the right.
+
+| Key | Action |
+|---|---|
+| `j` / `k` | Navigate sessions; the content panel follows |
+| `<CR>` | Focus the content panel |
+| `gr` | Resume the session in a terminal |
+| `ga` | Attach as a managed instance (headless RPC + chat) |
+| `go` | Open the raw session `.jsonl` |
+| `gc` | Toggle cwd-only / all-projects filter |
+| `gn` | Create a new session (prompts for name + editable location) |
+| `gR` | Refresh the session list |
+| `g?` | Toggle the keybinding cheatsheet |
+| `q` | Close the browser |
+
+#### Editing the list (oil.nvim-style)
+
+The list buffer is modifiable; edit it like any text and `:w` applies the
+changes to the session files on disk (after a confirmation prompt):
+
+- **Rename** — change a session's name in place (appends a `session_info`
+  entry, pi's own rename mechanism)
+- **Delete** — delete the session's line (`dd`)
+- **Move** — move a session's line under another project header (the header
+  cwd in the `.jsonl` is rewritten so pi resumes it in the new project)
+- **Copy** — paste a yanked session line under another project header
+  (the copy gets a fresh session id); optionally edit the name on the copy
+- **Create** — add a new indented line with a session name under a project
+  header (creates an empty session you can attach to or resume)
+
+Project headers are the unindented lines; you can also type a new header
+(e.g. `~/code/other-project`) and place sessions under it. Session lines
+carry a concealed `/id` token — leave it intact when editing names.
+
+In the content panel: `<CR>` expands/collapses the tool call under the cursor,
+`]t` / `[t` jump between tool calls, `q` closes the browser.
 
 In the picker:
 
@@ -59,7 +105,9 @@ In the sidebar (`:Conductor panel`):
 | `<CR>` | Open the chat buffer for the instance under the cursor |
 | `p` | Send a prompt without opening the chat |
 | `n` | Spawn a new instance |
+| `s` | Stop (abort) the running agent |
 | `x` | Kill instance and remove it |
+| `g?` | Toggle the keybinding cheatsheet |
 | `q` | Close sidebar |
 
 Status icons: running · needs input (agent finished or asked a question) · idle · error · exited. When an agent extension asks a question (select/confirm/input), conductor surfaces it via `vim.ui.select`/`vim.ui.input` and marks the instance *needs input*.
@@ -90,6 +138,7 @@ Log window:
 | `<CR>` | Expand/collapse the tool call under (or above) the cursor |
 | `]t` / `[t` | Jump to next / previous tool call |
 | `<C-c>` | Abort the running agent |
+| `g?` | Toggle the keybinding cheatsheet |
 | `q` | Close the chat view |
 
 Tool calls render as `▶ bash \`echo hi\`` while collapsed; expanding shows the captured output in a fenced code block. Running tools show `…`, failed tools `✗`.
@@ -100,7 +149,9 @@ Input bar:
 |---|---|
 | `<CR>` | Send prompt (normal or insert mode) |
 | `<S-CR>` | Insert newline |
+| `<C-c>` | Stop (abort) the running agent |
 | `<C-k>` | Focus the log window |
+| `g?` | Toggle the keybinding cheatsheet |
 | `q` | Close the chat view (normal mode) |
 
 The previewer shows the **parsed conversation log** — user prompts and assistant replies only — not the raw JSONL, so you can quickly assess which session you're looking at.
@@ -124,9 +175,42 @@ require('conductor').setup {
   sidebar = {
     width = 36,
   },
+  browser = {
+    width = 44, -- session-list panel width
+  },
   terminal = {
     backend = 'snacks', -- or 'split'
     snacks_win = { position = 'right', width = 0.5 },
+  },
+  -- Buffer-local keybindings, grouped by context. Override any key, or set it
+  -- to `false` to disable it. Only the keys you change need to be listed.
+  keymaps = {
+    browser_list = {
+      open = '<CR>',   -- open session content in the main window
+      resume = 'gr',   -- resume in a terminal
+      attach = 'ga',   -- attach as a managed (headless RPC) instance
+      open_raw = 'go', -- open the raw log file
+      toggle_cwd = 'gc', -- toggle cwd-only / all-projects filter
+      refresh = 'gR',
+      new = 'gn',
+      close = 'q',
+    },
+    browser_content = {
+      toggle_tool = '<CR>', next_tool = ']t', prev_tool = '[t', close = 'q',
+    },
+    sidebar = {
+      open_chat = '<CR>', prompt = 'p', new = 'n', stop = 's', kill = 'x', close = 'q',
+    },
+    chat = {
+      focus_input = 'i', toggle_tool = '<CR>', next_tool = ']t', prev_tool = '[t',
+      abort = '<C-c>', close = 'q',
+    },
+    input = {
+      send = '<CR>', newline = '<S-CR>', focus_log = '<C-k>', abort = '<C-c>', close = 'q',
+    },
+    help = {
+      toggle = 'g?', -- toggle the keybinding cheatsheet (attached to every buffer)
+    },
   },
 }
 ```

@@ -149,7 +149,49 @@ function M.spawn(opts)
   instance.handle = handle
   M.instances[instance.id] = instance
   set_status(instance, 'idle')
+
+  -- When attaching to an existing session, preload its on-disk history so the
+  -- chat view shows the prior conversation instead of starting blank. Only the
+  -- entries already flushed to the log file are available; anything the running
+  -- agent emits afterwards streams in through on_event as usual.
+  if opts.session_path then
+    M.load_history(instance)
+  end
+
   return instance
+end
+
+---Populate `instance.log` from the session file on disk (used when attaching to
+---an existing session). No-op when the log already has entries.
+---@param instance ConductorInstance
+function M.load_history(instance)
+  if not instance.session_path or #instance.log > 0 then
+    return
+  end
+  local adapter = require('conductor.adapters.interface').get(instance.adapter)
+
+  local function apply(entries)
+    -- Guard against a race where the agent streamed events before the parse
+    -- finished: only seed history if the log is still empty.
+    if #instance.log > 0 or type(entries) ~= 'table' then
+      return
+    end
+    for _, entry in ipairs(entries) do
+      instance.log[#instance.log + 1] = entry
+    end
+    require('conductor.chatlog').refresh(instance)
+  end
+
+  if adapter.parse_log_async then
+    adapter.parse_log_async(instance.session_path, function(ok, result)
+      if ok and type(result) == 'table' then
+        apply(result.entries)
+      end
+    end)
+  elseif adapter.parse_log then
+    local _, entries = adapter.parse_log(instance.session_path)
+    apply(entries)
+  end
 end
 
 ---Send a prompt to an instance; records it in the local log.

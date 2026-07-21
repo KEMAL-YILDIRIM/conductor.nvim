@@ -11,8 +11,14 @@ function M.setup(opts)
   interface.register(require 'conductor.adapters.pi')
 
   vim.api.nvim_create_user_command('Conductor', function(command)
-    local subcommand = command.fargs[1] or 'sessions'
-    if subcommand == 'sessions' then
+    local subcommand = command.fargs[1] or 'browse'
+    if subcommand == 'browse' then
+      -- Session browser: list panel on the left (cwd sessions by default),
+      -- conversation rendered in the main window on the right.
+      require('conductor.browser').toggle()
+    elseif subcommand == 'browse_all' then
+      require('conductor.browser').toggle { cwd = false }
+    elseif subcommand == 'sessions' then
       M.pick_sessions()
     elseif subcommand == 'here' then
       M.pick_sessions { cwd = vim.fn.getcwd() }
@@ -20,20 +26,33 @@ function M.setup(opts)
       require('conductor.sidebar').toggle()
     elseif subcommand == 'new' then
       local name = command.fargs[2]
-      local instance, spawn_error = require('conductor.supervisor').spawn { name = name }
-      if instance then
-        require('conductor.sidebar').open()
-        require('conductor.chatlog').open(instance)
-      else
-        vim.notify('conductor: ' .. (spawn_error or 'spawn failed'), vim.log.levels.ERROR)
-      end
+      -- Confirm the working directory before spawning: pre-fill the current
+      -- cwd (editable) so it can be corrected without silently landing in the
+      -- wrong project.
+      vim.ui.input({ prompt = 'Location: ', default = vim.fn.getcwd(), completion = 'dir' }, function(location)
+        if location == nil then
+          return -- cancelled
+        end
+        local cwd = vim.fs.normalize(vim.fn.expand(vim.trim(location)))
+        if cwd == '' then
+          vim.notify('conductor: location must not be empty', vim.log.levels.ERROR)
+          return
+        end
+        local instance, spawn_error = require('conductor.supervisor').spawn { name = name, cwd = cwd }
+        if instance then
+          require('conductor.sidebar').open()
+          require('conductor.chatlog').open(instance)
+        else
+          vim.notify('conductor: ' .. (spawn_error or 'spawn failed'), vim.log.levels.ERROR)
+        end
+      end)
     else
       vim.notify(('conductor: unknown subcommand %q'):format(subcommand), vim.log.levels.ERROR)
     end
   end, {
     nargs = '*',
     complete = function()
-      return { 'sessions', 'here', 'panel', 'new' }
+      return { 'browse', 'browse_all', 'sessions', 'here', 'panel', 'new' }
     end,
     desc = 'Conductor: manage AI agent sessions',
   })
@@ -45,27 +64,42 @@ function M.pick_sessions(opts)
   require('conductor.picker').open(opts)
 end
 
----Resume a session in a terminal.
+---Resume a session in a terminal (always opened in its own tab).
 ---@param session ConductorSession
 function M.resume(session)
   local adapter = interface.get(session.adapter)
   local argv = adapter.resume_cmd(session)
   local terminal_options = config.options.terminal
 
+  -- Open the resumed session on a dedicated tab so it never clutters the
+  -- current (e.g. browser/sidebar) layout. The tab starts as a single empty
+  -- scratch window that the terminal takes over.
+  vim.cmd 'tabnew'
+
   if terminal_options.backend == 'snacks' then
     local ok, snacks = pcall(require, 'snacks')
     if ok then
-      snacks.terminal(argv, {
+      -- Use `terminal.open` (not the module's `__call`/`toggle`) so resuming
+      -- always spawns a fresh terminal. `toggle` dedupes by cmd+cwd+env+count
+      -- and would *hide* an already-open terminal for the same session,
+      -- leaving the freshly created tab empty (the "stuck" symptom).
+      --
+      -- Force `position = 'current'` so the terminal replaces the scratch
+      -- buffer *in place*, owning the whole tab. The previous approach opened
+      -- a `position = 'right'` split and then closed the scratch window; that
+      -- split-then-close raced Snacks' stacking/equalize and TermClose/Wipeout
+      -- handlers, which is what left resume "stuck" in a half-torn layout.
+      local win = vim.tbl_extend('force', terminal_options.snacks_win or {}, { position = 'current' })
+      snacks.terminal.open(argv, {
         cwd = session.cwd,
-        win = terminal_options.snacks_win,
+        win = win,
         interactive = true,
       })
       return
     end
   end
 
-  -- Fallback: plain split terminal.
-  vim.cmd 'vsplit'
+  -- Fallback: native terminal reusing the new tab's window.
   vim.fn.jobstart(argv, { cwd = session.cwd, term = true })
   vim.cmd 'startinsert'
 end

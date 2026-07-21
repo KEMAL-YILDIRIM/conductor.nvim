@@ -3,8 +3,12 @@
 local M = {}
 
 ---@class ConductorLogEntry
----@field role 'user'|'assistant'|'system'
----@field text string
+---@field role 'user'|'assistant'|'system'|'tool'
+---@field text string message text, or tool name for role='tool'
+---@field summary string|nil tool args one-liner (role='tool')
+---@field output string|nil tool output (role='tool')
+---@field is_error boolean|nil tool failed (role='tool')
+---@field expanded boolean|nil tool output unfolded in a viewer
 ---@field timestamp string|nil ISO timestamp
 
 ---@class ConductorSessionMeta
@@ -40,6 +44,24 @@ local function content_to_text(content)
   return table.concat(parts, '\n')
 end
 
+---Summarize tool-call arguments for display (best-effort, single line).
+---@param args table|nil
+---@return string
+local function summarize_args(args)
+  if type(args) ~= 'table' then
+    return ''
+  end
+  local summary = args.command or args.path or args.pattern or args.url or ''
+  if type(summary) ~= 'string' then
+    return ''
+  end
+  summary = summary:gsub('\n.*', ' …')
+  if #summary > 80 then
+    summary = summary:sub(1, 77) .. '…'
+  end
+  return summary
+end
+
 ---Parse a single session file.
 ---@param path string
 ---@return ConductorSessionMeta meta, ConductorLogEntry[] entries
@@ -48,6 +70,10 @@ function M.parse(path)
   local meta = { message_count = 0 }
   ---@type ConductorLogEntry[]
   local entries = {}
+
+  ---Tool entries awaiting their toolResult, keyed by toolCallId.
+  ---@type table<string, ConductorLogEntry>
+  local tool_by_id = {}
 
   local file = io.open(path, 'r')
   if not file then
@@ -82,6 +108,30 @@ function M.parse(path)
               meta.message_count = meta.message_count + 1
               entries[#entries + 1] = { role = 'assistant', text = text, timestamp = entry.timestamp }
             end
+            -- Tool calls become collapsible entries; output attaches on toolResult.
+            if type(message.content) == 'table' then
+              for _, block in ipairs(message.content) do
+                if type(block) == 'table' and block.type == 'toolCall' then
+                  local tool_entry = {
+                    role = 'tool',
+                    text = block.name or 'tool',
+                    summary = summarize_args(block.arguments),
+                    timestamp = entry.timestamp,
+                  }
+                  entries[#entries + 1] = tool_entry
+                  if block.id then
+                    tool_by_id[block.id] = tool_entry
+                  end
+                end
+              end
+            end
+          elseif message.role == 'toolResult' then
+            local tool_entry = message.toolCallId and tool_by_id[message.toolCallId]
+            if tool_entry then
+              tool_entry.output = content_to_text(message.content)
+              tool_entry.is_error = message.isError == true
+              tool_by_id[message.toolCallId] = nil
+            end
           end
         elseif entry.type == 'compaction' and entry.summary then
           entries[#entries + 1] = { role = 'system', text = '[compaction]\n' .. entry.summary, timestamp = entry.timestamp }
@@ -92,6 +142,16 @@ function M.parse(path)
   file:close()
 
   return meta, entries
+end
+
+---Same as `M.parse`, but bundled into a single table so it round-trips
+---through `conductor.threadwork`'s JSON envelope (which carries one result
+---value, not Lua multi-returns).
+---@param path string
+---@return { meta: ConductorSessionMeta, entries: ConductorLogEntry[] }
+function M.parse_pair(path)
+  local meta, entries = M.parse(path)
+  return { meta = meta, entries = entries }
 end
 
 ---Cheap metadata-only scan for session listings.
@@ -179,6 +239,12 @@ function M.render_preview(meta, entries, opts)
 
   for index = start_index, #entries do
     local entry = entries[index]
+    if entry.role == 'tool' then
+      local label = entry.summary ~= '' and ('%s `%s`'):format(entry.text, entry.summary) or entry.text
+      add(('> ▶ %s%s'):format(label, entry.is_error and ' ✗' or ''))
+      add ''
+      goto continue
+    end
     local label = entry.role == 'user' and '## You' or entry.role == 'assistant' and '## Agent' or '## System'
     add(label)
     local body_lines = vim.split(entry.text, '\n', { plain = true })
@@ -193,6 +259,7 @@ function M.render_preview(meta, entries, opts)
       end
     end
     add ''
+    ::continue::
   end
 
   return lines
