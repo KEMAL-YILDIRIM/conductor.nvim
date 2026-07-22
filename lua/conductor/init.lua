@@ -71,6 +71,31 @@ function M.resume(session)
   local argv = adapter.resume_cmd(session)
   local terminal_options = config.options.terminal
 
+  -- 'external' backend: hand the resume command off to a user-supplied opener
+  -- (e.g. spawn a new WezTerm tab) instead of taking over an nvim tab. Only
+  -- fall back to an in-editor terminal if no handler is set or it fails.
+  if terminal_options.backend == 'external' then
+    local open = terminal_options.open
+    if type(open) == 'function' then
+      local ok, result = pcall(open, { argv = argv, cwd = session.cwd, session = session })
+      if ok and result ~= false then
+        return
+      end
+      vim.notify(
+        'conductor: external terminal handler failed'
+          .. (ok and '' or (': ' .. tostring(result)))
+          .. '; falling back to nvim tab',
+        vim.log.levels.WARN
+      )
+    else
+      vim.notify(
+        'conductor: terminal.backend is "external" but terminal.open is not set; '
+          .. 'falling back to nvim tab',
+        vim.log.levels.WARN
+      )
+    end
+  end
+
   -- Open the resumed session on a dedicated tab so it never clutters the
   -- current (e.g. browser/sidebar) layout. The tab starts as a single empty
   -- scratch window that the terminal takes over.

@@ -20,6 +20,7 @@ conductor-default_adapter	conductor.txt	/*conductor-default_adapter*
 conductor-external	conductor.txt	/*conductor-external*
 conductor-fzf-lua	conductor.txt	/*conductor-fzf-lua*
 conductor-input-keys	conductor.txt	/*conductor-input-keys*
+conductor-keymaps	conductor.txt	/*conductor-keymaps*
 conductor-options	conductor.txt	/*conductor-options*
 conductor-picker	conductor.txt	/*conductor-picker*
 conductor-picker-keys	conductor.txt	/*conductor-picker-keys*
@@ -34,6 +35,7 @@ conductor-sidebar-keys	conductor.txt	/*conductor-sidebar-keys*
 conductor-sidebar-status	conductor.txt	/*conductor-sidebar-status*
 conductor-sidebar.width	conductor.txt	/*conductor-sidebar.width*
 conductor-terminal.backend	conductor.txt	/*conductor-terminal.backend*
+conductor-terminal.open	conductor.txt	/*conductor-terminal.open*
 conductor-terminal.snacks_win	conductor.txt	/*conductor-terminal.snacks_win*
 conductor.nvim	conductor.txt	/*conductor.nvim*
 conductor.pick_sessions()	conductor.txt	/*conductor.pick_sessions()*

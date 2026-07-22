@@ -29,10 +29,23 @@ local defaults = {
     width = 44,
   },
   terminal = {
-    ---How to open the resumed session: 'snacks' (snacks.nvim terminal) or 'split'.
+    ---How to open the resumed session:
+    ---  'snacks'   - snacks.nvim terminal in a new nvim tab
+    ---  'split'    - native nvim terminal in a new nvim tab
+    ---  'external' - hand off to `terminal.open` (e.g. a new WezTerm tab)
     backend = 'snacks',
     ---Options passed to Snacks.terminal win config.
     snacks_win = { position = 'right', width = 0.5 },
+    ---Handler for the 'external' backend. Receives the resume command so you
+    ---can launch it in whatever terminal you like. Return truthy to signal
+    ---success; return falsy/nil (or error) to fall back to a native nvim tab.
+    ---Example (new WezTerm tab):
+    ---  open = function(o)
+    ---    return vim.system(vim.list_extend(
+    ---      { 'wezterm', 'cli', 'spawn', '--cwd', o.cwd, '--' }, o.argv)):wait().code == 0
+    ---  end
+    ---@type nil|fun(opts: { argv: string[], cwd: string|nil, session: ConductorSession }): boolean|nil
+    open = nil,
   },
   ---Buffer-local keybindings, grouped by conductor context. Override any key by
   ---passing the same path in `setup()`; set a key to `false` to disable it.

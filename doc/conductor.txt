@@ -229,9 +229,11 @@ Call `require('conductor').setup(opts)`. Defaults: >lua
         width = 44,            -- session-list panel width in columns
       },
       terminal = {
-        backend = 'snacks',    -- 'snacks' (snacks.nvim) or 'split'
+        backend = 'snacks',    -- 'snacks', 'split', or 'external'
         snacks_win = { position = 'right', width = 0.5 },
+        -- open = function(o) ... end,  -- used when backend = 'external'
       },
+      keymaps = { ... },      -- see |conductor-keymaps|
     }
 <
 Options:                                                    *conductor-options*
@@ -270,12 +272,101 @@ browser.width                                        *conductor-browser.width*
 
 terminal.backend                                  *conductor-terminal.backend*
     Type: `string`, default: `'snacks'`
-    How resumed sessions are opened: `'snacks'` (snacks.nvim terminal,
-    falls back to split when unavailable) or `'split'`.
+    How resumed sessions are opened:
+      `'snacks'`   - snacks.nvim terminal in a new nvim tab (falls back to
+                     split when unavailable)
+      `'split'`    - native nvim terminal in a new nvim tab
+      `'external'` - hand off to `terminal.open` (e.g. a new WezTerm tab)
 
 terminal.snacks_win                            *conductor-terminal.snacks_win*
     Type: `table`, default: `{ position = 'right', width = 0.5 }`
     Window options passed to `Snacks.terminal`.
+
+terminal.open                                        *conductor-terminal.open*
+    Type: `fun(opts)|nil`, default: `nil`
+    Handler for the `'external'` backend. Called with a table:
+      `argv`    - the resume command as a string list
+      `cwd`     - the session working directory (may be nil)
+      `session` - the |ConductorSession| being resumed
+    Launch the command in whatever terminal you like and return a truthy
+    value on success. Returning `false`/`nil` or raising an error falls
+    back to opening a native nvim tab. Example (new WezTerm tab): >lua
+      open = function(o)
+        return vim.system(vim.list_extend(
+          { 'wezterm', 'cli', 'spawn', '--cwd', o.cwd, '--' }, o.argv
+        )):wait().code == 0
+      end
+<
+keymaps                                                  *conductor-keymaps*
+    Type: `table`
+    Buffer-local keybindings, grouped by conductor context. Override any
+    single key by passing the same path to `setup()`; set a key to `false`
+    to disable it. Only the keys you change need to be listed — everything
+    else keeps its default. The groups are `browser_list`, `browser_content`,
+    `sidebar`, `chat`, `input`, and `help`.
+
+    Remap a couple of keys and disable one: >lua
+      require('conductor').setup {
+        keymaps = {
+          browser_list = {
+            resume = '<CR>',   -- resume with Enter instead of `gr`
+            open_raw = false,  -- disable the raw-log mapping
+          },
+          chat = {
+            focus_input = 'a', -- focus the input bar with `a`
+          },
+          help = {
+            toggle = '<F1>',   -- cheatsheet on <F1> instead of `g?`
+          },
+        },
+      }
+<
+    Full set of defaults: >lua
+      keymaps = {
+        browser_list = {
+          open = '<CR>',       -- open session content in the main window
+          resume = 'gr',       -- resume in a terminal
+          attach = 'ga',       -- attach as a managed (headless RPC) instance
+          open_raw = 'go',     -- open the raw log file
+          toggle_cwd = 'gc',   -- toggle cwd-only / all-projects filter
+          refresh = 'gR',      -- refresh the session list
+          new = 'gn',          -- create a new session
+          close = 'q',         -- close the browser
+        },
+        browser_content = {
+          toggle_tool = '<CR>', -- toggle tool-call output under the cursor
+          next_tool = ']t',     -- jump to the next tool call
+          prev_tool = '[t',     -- jump to the previous tool call
+          close = 'q',          -- close the browser
+        },
+        sidebar = {
+          open_chat = '<CR>',  -- open the chat buffer for the instance
+          prompt = 'p',        -- send a prompt without opening the chat
+          new = 'n',           -- spawn a new instance
+          stop = 's',          -- stop the running agent
+          kill = 'x',          -- kill / remove the instance
+          close = 'q',         -- close the sidebar
+        },
+        chat = {
+          focus_input = 'i',   -- focus the input bar (insert mode)
+          toggle_tool = '<CR>', -- toggle tool-call output under the cursor
+          next_tool = ']t',    -- jump to the next tool call
+          prev_tool = '[t',    -- jump to the previous tool call
+          abort = '<C-c>',     -- abort the running agent
+          close = 'q',         -- close the chat view
+        },
+        input = {
+          send = '<CR>',       -- send the prompt
+          newline = '<S-CR>',  -- insert a literal newline (insert mode)
+          focus_log = '<C-k>', -- focus the log window
+          abort = '<C-c>',     -- abort the running agent
+          close = 'q',         -- close the chat view (normal mode)
+        },
+        help = {
+          toggle = 'g?',       -- toggle the keybinding cheatsheet
+        },
+      }
+<
 
 ==============================================================================
 10. LUA API                                                     *conductor-api*

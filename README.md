@@ -179,8 +179,15 @@ require('conductor').setup {
     width = 44, -- session-list panel width
   },
   terminal = {
-    backend = 'snacks', -- or 'split'
+    backend = 'snacks', -- 'snacks', 'split', or 'external'
     snacks_win = { position = 'right', width = 0.5 },
+    -- Used when backend = 'external'. Launch the resume command wherever you
+    -- like (e.g. a new WezTerm tab). Return truthy on success; falsy/error
+    -- falls back to a native nvim tab.
+    -- open = function(o)
+    --   return vim.system(vim.list_extend(
+    --     { 'wezterm', 'cli', 'spawn', '--cwd', o.cwd, '--' }, o.argv)):wait().code == 0
+    -- end,
   },
   -- Buffer-local keybindings, grouped by context. Override any key, or set it
   -- to `false` to disable it. Only the keys you change need to be listed.

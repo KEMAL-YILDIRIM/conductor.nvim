@@ -253,16 +253,34 @@ function M.open()
   end
 
   -- Poll presence files for external sessions while the sidebar is open.
-  -- Managed instances remain purely event-driven.
+  -- Managed instances remain purely event-driven. The liveness probe runs
+  -- asynchronously (see external.refresh_async) so it never blocks the UI
+  -- thread; render() only ever reads the cached result.
   if not state.refresh_timer then
     state.refresh_timer = vim.uv.new_timer()
     state.refresh_timer:start(2000, 2000, vim.schedule_wrap(function()
-      if window_valid() then
-        M.render()
+      if not window_valid() then
+        return
       end
+      require('conductor.external').refresh_async {
+        on_done = function()
+          if window_valid() then
+            M.render()
+          end
+        end,
+      }
     end))
   end
 
+  -- Kick off an initial async refresh, then render whatever is cached so far.
+  require('conductor.external').refresh_async {
+    interval_ms = 0,
+    on_done = function()
+      if window_valid() then
+        M.render()
+      end
+    end,
+  }
   M.render()
 end
 

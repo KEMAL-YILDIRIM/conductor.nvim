@@ -16,40 +16,10 @@ local function presence_dir()
   return vim.fs.normalize(vim.fn.expand '~/.pi/agent/conductor/presence')
 end
 
----Check liveness for a set of pids in one shot.
----@param pids integer[]
----@return table<integer, boolean>
-local function alive_map(pids)
-  local alive = {}
-  if #pids == 0 then
-    return alive
-  end
-  if vim.fn.has 'win32' == 1 then
-    -- Single tasklist call for all pids (per-pid calls are too slow to poll).
-    local result = vim.system({ 'tasklist', '/NH', '/FO', 'CSV' }, { text = true }):wait()
-    if result.code == 0 and result.stdout then
-      local running = {}
-      for pid_string in result.stdout:gmatch '","(%d+)",' do
-        running[tonumber(pid_string)] = true
-      end
-      for _, pid in ipairs(pids) do
-        alive[pid] = running[pid] == true
-      end
-    end
-  else
-    for _, pid in ipairs(pids) do
-      alive[pid] = vim.uv.kill(pid, 0) == 0
-    end
-  end
-  return alive
-end
-
----List live external sessions; prunes presence files of dead processes.
----@return ConductorExternalSession[]
-function M.list()
-  local sessions = {}
+---Read and decode all presence files. Cheap, synchronous (small JSON files).
+---@return { file: string, decoded: table }[] candidates, integer[] pids
+local function read_candidates()
   local files = vim.fn.glob(presence_dir() .. '/*.json', true, true)
-
   ---@type { file: string, decoded: table }[]
   local candidates = {}
   local pids = {}
@@ -65,8 +35,15 @@ function M.list()
       end
     end
   end
+  return candidates, pids
+end
 
-  local alive = alive_map(pids)
+---Build the session list from candidates + a liveness map, pruning dead ones.
+---@param candidates { file: string, decoded: table }[]
+---@param alive table<integer, boolean>
+---@return ConductorExternalSession[]
+local function build_sessions(candidates, alive)
+  local sessions = {}
   for _, candidate in ipairs(candidates) do
     local decoded = candidate.decoded
     if alive[decoded.pid] then
@@ -89,17 +66,69 @@ function M.list()
   return sessions
 end
 
----Cached external list refreshed at most every `interval_ms`.
-local cache = { at = 0, sessions = {} }
----@param interval_ms integer|nil default 2000
+local cache = { at = 0, sessions = {}, refreshing = false }
+
+---Return the last-known external session list without any blocking work.
+---Callers that want fresh data should also kick off `M.refresh_async`.
 ---@return ConductorExternalSession[]
-function M.list_cached(interval_ms)
-  local now = vim.uv.now()
-  if now - cache.at > (interval_ms or 2000) then
-    cache.sessions = M.list()
-    cache.at = now
-  end
+function M.list_cached()
   return cache.sessions
+end
+
+---Refresh the external session cache without ever blocking the UI thread.
+---On Windows the liveness probe (`tasklist`) is spawned asynchronously; the
+---cache and the optional `on_done` callback fire once it completes. Concurrent
+---calls and calls within `interval_ms` of the last refresh are coalesced.
+---@param opts { interval_ms?: integer, on_done?: fun(sessions: ConductorExternalSession[]) }|nil
+function M.refresh_async(opts)
+  opts = opts or {}
+  local now = vim.uv.now()
+  if cache.refreshing or now - cache.at <= (opts.interval_ms or 2000) then
+    return
+  end
+  cache.refreshing = true
+
+  local candidates, pids = read_candidates()
+
+  local function finish(alive)
+    cache.sessions = build_sessions(candidates, alive)
+    cache.at = vim.uv.now()
+    cache.refreshing = false
+    if opts.on_done then
+      opts.on_done(cache.sessions)
+    end
+  end
+
+  if #pids == 0 then
+    finish {}
+    return
+  end
+
+  if vim.fn.has 'win32' == 1 then
+    -- Single async tasklist call for all pids; never blocks the main loop.
+    vim.system({ 'tasklist', '/NH', '/FO', 'CSV' }, { text = true }, function(result)
+      local alive = {}
+      if result.code == 0 and result.stdout then
+        local running = {}
+        for pid_string in result.stdout:gmatch '","(%d+)",' do
+          running[tonumber(pid_string)] = true
+        end
+        for _, pid in ipairs(pids) do
+          alive[pid] = running[pid] == true
+        end
+      end
+      vim.schedule(function()
+        finish(alive)
+      end)
+    end)
+  else
+    -- POSIX: signal-0 probe is a cheap syscall, safe to run inline.
+    local alive = {}
+    for _, pid in ipairs(pids) do
+      alive[pid] = vim.uv.kill(pid, 0) == 0
+    end
+    finish(alive)
+  end
 end
 
 ---Path to the bundled pi extension (for installation instructions).
