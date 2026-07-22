@@ -354,12 +354,22 @@ function M.open(instance, opts)
   -- First open: build the shared shell (log window + input bar below it).
   -- When handed an existing window (e.g. the browser's log-preview pane),
   -- adopt it in place so the chat *replaces* that pane instead of adding a
-  -- fresh vsplit alongside it.
+  -- fresh vsplit alongside it. Otherwise adopt the *current* window so the
+  -- chat opens in place — except when the current window is the sidebar,
+  -- which must stay put: reuse the window to its right, splitting one off
+  -- only if there is nothing there yet.
   if window_valid(opts.reuse_win) then
     vim.api.nvim_set_current_win(opts.reuse_win)
     shell.log_win = opts.reuse_win
+  elseif require('conductor.sidebar').is_window(vim.api.nvim_get_current_win()) then
+    local sidebar_win = vim.api.nvim_get_current_win()
+    vim.cmd 'wincmd l'
+    if vim.api.nvim_get_current_win() == sidebar_win then
+      -- No neighbour to the right: carve one out.
+      vim.cmd 'rightbelow vsplit'
+    end
+    shell.log_win = vim.api.nvim_get_current_win()
   else
-    vim.cmd 'vsplit'
     shell.log_win = vim.api.nvim_get_current_win()
   end
   vim.api.nvim_win_set_buf(shell.log_win, instance.chat_bufnr)

@@ -41,6 +41,14 @@ local function window_valid()
   return state.winid ~= nil and vim.api.nvim_win_is_valid(state.winid)
 end
 
+---Whether the given window is the live-sessions sidebar. Lets other panels
+---(e.g. the chat shell) avoid adopting the sidebar as their own pane.
+---@param window integer|nil
+---@return boolean
+function M.is_window(window)
+  return window ~= nil and window == state.winid and window_valid()
+end
+
 function M.render()
   if not buffer_valid() then
     return
