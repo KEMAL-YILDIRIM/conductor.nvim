@@ -38,6 +38,44 @@ local function read_candidates()
   return candidates, pids
 end
 
+---Cache of derived display names keyed by session file, invalidated by mtime.
+---Avoids re-scanning each log on every 2s refresh.
+local name_cache = {}
+
+---Derive a human-friendly name for an unnamed session: prefer the first user
+---prompt in its log (like the all-sessions pane), then the file basename, then
+---the pid. Cached by file mtime+size to avoid rescanning on every refresh.
+---@param session_file string|nil
+---@param pid integer
+---@return string
+local function session_display_name(session_file, pid)
+  if not session_file then
+    return ('pid %d'):format(pid)
+  end
+
+  local stat = vim.uv.fs_stat(session_file)
+  local cache_key = stat and ('%d.%d:%d'):format(stat.mtime.sec, stat.mtime.nsec, stat.size)
+  local cached = name_cache[session_file]
+  if cached and cache_key and cached.key == cache_key then
+    return cached.name
+  end
+
+  local name = vim.fn.fnamemodify(session_file, ':t:r')
+  local ok, meta = pcall(require('conductor.log_parser').scan_meta, session_file)
+  if ok and meta and type(meta.first_user_text) == 'string' and meta.first_user_text ~= '' then
+    local first_line = meta.first_user_text:gsub('\n.*', '')
+    if #first_line > 60 then
+      first_line = first_line:sub(1, 57) .. '…'
+    end
+    name = first_line
+  end
+
+  if cache_key then
+    name_cache[session_file] = { key = cache_key, name = name }
+  end
+  return name
+end
+
 ---Build the session list from candidates + a liveness map, pruning dead ones.
 ---@param candidates { file: string, decoded: table }[]
 ---@param alive table<integer, boolean>
@@ -47,13 +85,23 @@ local function build_sessions(candidates, alive)
   for _, candidate in ipairs(candidates) do
     local decoded = candidate.decoded
     if alive[decoded.pid] then
+      -- vim.json.decode maps JSON null to vim.NIL, which is truthy in Lua.
+      -- Coerce it to nil so `or` fallbacks work as intended.
+      local function nilable(value)
+        if value == nil or value == vim.NIL then
+          return nil
+        end
+        return value
+      end
+      local session_file = nilable(decoded.sessionFile)
+      local session_name = nilable(decoded.sessionName)
       sessions[#sessions + 1] = {
         pid = decoded.pid,
-        status = decoded.status or 'idle',
-        session_file = decoded.sessionFile,
-        name = decoded.sessionName or (decoded.sessionFile and vim.fn.fnamemodify(decoded.sessionFile, ':t:r') or ('pid %d'):format(decoded.pid)),
-        cwd = decoded.cwd,
-        updated_at = decoded.updatedAt,
+        status = nilable(decoded.status) or 'idle',
+        session_file = session_file,
+        name = session_name or session_display_name(session_file, decoded.pid),
+        cwd = nilable(decoded.cwd),
+        updated_at = nilable(decoded.updatedAt),
       }
     else
       -- Stale presence file from a crashed/killed process.

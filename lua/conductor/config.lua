@@ -44,6 +44,23 @@ local defaults = {
     ---    return vim.system(vim.list_extend(
     ---      { 'wezterm', 'cli', 'spawn', '--cwd', o.cwd, '--' }, o.argv)):wait().code == 0
     ---  end
+    ---
+    ---NOTE (Windows): `argv[1]` is often a `.cmd`/`.bat` shim (npm installs `pi`
+    ---as `pi.cmd`). Spawning it directly makes the batch shim re-expand `%*` and
+    ---re-split arguments on spaces, corrupting any path that contains a space
+    ---(e.g. a session under `C:\Users\First Last\...`). The agent then receives
+    ---a mangled `--session` value and exits non-zero. Launch through a shell that
+    ---parses argv exactly once instead. Example (Windows, PowerShell):
+    ---  open = function(o)
+    ---    local q = {}
+    ---    for _, a in ipairs(o.argv) do
+    ---      q[#q + 1] = "'" .. tostring(a):gsub("'", "''") .. "'"
+    ---    end
+    ---    return vim.system({
+    ---      'wezterm', 'cli', 'spawn', '--cwd', o.cwd, '--',
+    ---      'pwsh', '-NoLogo', '-NoExit', '-Command', '& ' .. table.concat(q, ' '),
+    ---    }):wait().code == 0
+    ---  end
     ---@type nil|fun(opts: { argv: string[], cwd: string|nil, session: ConductorSession }): boolean|nil
     open = nil,
   },
@@ -59,6 +76,7 @@ local defaults = {
       toggle_cwd = 'gc', ---Toggle cwd-only / all-projects filter.
       refresh = 'gR', ---Refresh the session list.
       new = 'gn', ---Create a new session.
+      search = 'g/', ---Grep search across all sessions' conversation text.
       close = 'q', ---Close the browser.
     },
     ---Session browser content window (parsed log view).

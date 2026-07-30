@@ -108,6 +108,7 @@ Session list panel:                                    *conductor-browser-keys*
     o           Open the raw session `.jsonl` file
     c           Toggle cwd-only / all-projects filter
     R           Refresh the session list
+    g/          Live grep across all sessions (type to filter; jumps to match)
     q           Close the browser
 
 Content panel:
@@ -297,6 +298,23 @@ terminal.open                                        *conductor-terminal.open*
         )):wait().code == 0
       end
 <
+    Windows note: `argv[1]` is usually a .cmd/.bat shim (npm installs `pi`
+    as `pi.cmd`). Spawning it directly makes the batch shim re-split its
+    arguments on spaces, corrupting session paths that contain a space
+    (e.g. under `C:\Users\First Last\...`); the agent then exits non-zero.
+    Launch through a shell that parses argv exactly once instead: >lua
+      open = function(o)
+        local q = {}
+        for _, a in ipairs(o.argv) do
+          q[#q + 1] = "'" .. tostring(a):gsub("'", "''") .. "'"
+        end
+        return vim.system({
+          'wezterm', 'cli', 'spawn', '--cwd', o.cwd, '--',
+          'pwsh', '-NoLogo', '-NoExit', '-Command',
+          '& ' .. table.concat(q, ' '),
+        }):wait().code == 0
+      end
+<
 keymaps                                                  *conductor-keymaps*
     Type: `table`
     Buffer-local keybindings, grouped by conductor context. Override any
@@ -331,6 +349,7 @@ keymaps                                                  *conductor-keymaps*
           toggle_cwd = 'gc',   -- toggle cwd-only / all-projects filter
           refresh = 'gR',      -- refresh the session list
           new = 'gn',          -- create a new session
+          search = 'g/',       -- grep search across all sessions
           close = 'q',         -- close the browser
         },
         browser_content = {

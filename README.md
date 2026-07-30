@@ -49,6 +49,7 @@ Currently supports the [pi coding agent](https://github.com/earendil-works/pi-mo
 | `:Conductor here` | Pick from sessions for the current working directory |
 | `:Conductor panel` | Toggle the live sessions sidebar |
 | `:Conductor new [name]` | Spawn a new managed agent instance |
+| `:Conductor search` | Grep across every session's conversation text |
 
 ### Session browser (`:Conductor browse`)
 
@@ -66,6 +67,7 @@ the right.
 | `go` | Open the raw session `.jsonl` |
 | `gc` | Toggle cwd-only / all-projects filter |
 | `gn` | Create a new session (prompts for name + editable location) |
+| `g/` | Live grep across all sessions — type to filter, `<CR>` jumps to the match |
 | `gR` | Refresh the session list |
 | `g?` | Toggle the keybinding cheatsheet |
 | `q` | Close the browser |
@@ -187,6 +189,21 @@ require('conductor').setup {
     -- open = function(o)
     --   return vim.system(vim.list_extend(
     --     { 'wezterm', 'cli', 'spawn', '--cwd', o.cwd, '--' }, o.argv)):wait().code == 0
+    -- end,
+    --
+    -- Windows note: `argv[1]` is usually a .cmd/.bat shim (npm installs `pi` as
+    -- `pi.cmd`). Spawning it directly makes the batch shim re-split arguments on
+    -- spaces, corrupting session paths under e.g. `C:\Users\First Last\...` (the
+    -- agent then exits non-zero). Launch through a shell that parses argv once:
+    -- open = function(o)
+    --   local q = {}
+    --   for _, a in ipairs(o.argv) do
+    --     q[#q + 1] = "'" .. tostring(a):gsub("'", "''") .. "'"
+    --   end
+    --   return vim.system({
+    --     'wezterm', 'cli', 'spawn', '--cwd', o.cwd, '--',
+    --     'pwsh', '-NoLogo', '-NoExit', '-Command', '& ' .. table.concat(q, ' '),
+    --   }):wait().code == 0
     -- end,
   },
   -- Buffer-local keybindings, grouped by context. Override any key, or set it

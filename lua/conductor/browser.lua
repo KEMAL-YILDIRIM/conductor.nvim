@@ -616,7 +616,12 @@ local function ensure_content_win()
   else
     state.content_win = current
   end
-  vim.api.nvim_set_current_win(current)
+  -- `current` was captured before we hopped to `state.list_win` (possibly in
+  -- another tab). When this runs from the async refresh callback the user may
+  -- have since closed that window, so only restore focus if it is still valid.
+  if win_valid(current) then
+    vim.api.nvim_set_current_win(current)
+  end
 end
 
 ---@param buffer_lines string[]
@@ -633,7 +638,8 @@ end
 ---stale async parse (e.g. from a big log) landing after the cursor has since
 ---moved to a different session.
 ---@param session ConductorSession
-local function show_session(session)
+---@param on_ready fun()|nil called once the *final* content is rendered (cached or async)
+local function show_session(session, on_ready)
   ensure_content_buf()
   ensure_content_win()
 
@@ -663,6 +669,9 @@ local function show_session(session)
   end
 
   if cached then
+    if on_ready then
+      on_ready()
+    end
     return
   end
 
@@ -673,7 +682,43 @@ local function show_session(session)
     local lines, tool_lines = render_content_lines(meta, entries, session)
     state.tool_lines = tool_lines
     set_content_lines(lines)
+    if on_ready then
+      on_ready()
+    end
   end)
+end
+
+---Move the content-window cursor to the first occurrence of `query`, enabling
+---search highlight so `n`/`N` continue from there. Best-effort: a miss is a
+---no-op (the session content is still shown).
+---@param query string
+local function jump_to_query(query)
+  if not win_valid(state.content_win) then
+    return
+  end
+  vim.api.nvim_set_current_win(state.content_win)
+  local pattern = '\\V' .. vim.fn.escape(query, '\\')
+  pcall(vim.api.nvim_win_set_cursor, state.content_win, { 1, 0 })
+  if vim.fn.search(pattern, 'cW') > 0 then
+    vim.fn.setreg('/', pattern)
+    vim.v.hlsearch = 1
+    vim.cmd 'normal! zz'
+  end
+end
+
+---Position the list cursor on `session`, if it is present in the current list.
+---@param session ConductorSession
+local function locate_in_list(session)
+  if not win_valid(state.list_win) then
+    return
+  end
+  for line, index in pairs(state.line_to_session) do
+    local candidate = state.sessions[index]
+    if candidate and candidate.path == session.path then
+      pcall(vim.api.nvim_win_set_cursor, state.list_win, { line, 0 })
+      return
+    end
+  end
 end
 
 local function preview_debounced()
@@ -811,6 +856,10 @@ local function setup_list_keymaps()
 
   config.map('browser_list', 'new', 'n', create_new_session, vim.tbl_extend('force', options, { desc = 'Conductor: new session' }))
 
+  config.map('browser_list', 'search', 'n', function()
+    require('conductor.search').open()
+  end, vim.tbl_extend('force', options, { desc = 'Conductor: grep search all sessions' }))
+
   config.map('browser_list', 'close', 'n', M.close, vim.tbl_extend('force', options, { desc = 'Conductor: close browser' }))
 
   require('conductor.help').attach(state.list_buf)
@@ -889,6 +938,32 @@ function M.open(opts)
       show_session(session)
     end
   end)
+end
+
+---Open (or focus) the browser, render `session` in the content pane, and jump
+---to the first occurrence of `query`. Backs the cross-session grep
+---(`conductor.search`). When the browser is closed it is opened across all
+---projects first so the target session is always reachable.
+---@param session ConductorSession
+---@param query string|nil
+function M.reveal(session, query)
+  local opening = not win_valid(state.list_win)
+  local function do_reveal()
+    show_session(session, function()
+      if query and query ~= '' then
+        jump_to_query(query)
+      end
+    end)
+    locate_in_list(session)
+  end
+  if opening then
+    M.open { cwd = false }
+    -- open()'s session list loads asynchronously; give it a beat before we
+    -- position the list cursor (content rendering does not depend on it).
+    vim.defer_fn(do_reveal, 120)
+  else
+    do_reveal()
+  end
 end
 
 ---Whether the browser list panel is currently open in the current tab.

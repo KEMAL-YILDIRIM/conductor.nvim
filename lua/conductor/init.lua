@@ -24,6 +24,8 @@ function M.setup(opts)
       M.pick_sessions { cwd = vim.fn.getcwd() }
     elseif subcommand == 'panel' then
       require('conductor.sidebar').toggle()
+    elseif subcommand == 'search' then
+      require('conductor.search').open()
     elseif subcommand == 'new' then
       local name = command.fargs[2]
       -- Confirm the working directory before spawning: pre-fill the current
@@ -52,7 +54,7 @@ function M.setup(opts)
   end, {
     nargs = '*',
     complete = function()
-      return { 'browse', 'browse_all', 'sessions', 'here', 'panel', 'new' }
+      return { 'browse', 'browse_all', 'sessions', 'here', 'panel', 'new', 'search' }
     end,
     desc = 'Conductor: manage AI agent sessions',
   })
