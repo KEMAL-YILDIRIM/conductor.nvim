@@ -130,6 +130,27 @@ function M.preview_lines_async(session, adapter, callback)
   end)
 end
 
+--- Preview highlighting ----------------------------------------------------
+
+---Markdown-highlight a telescope preview buffer using Vim's regex syntax
+---engine rather than Treesitter.
+---
+---Cancelling a picker with the interrupt key (`<C-c>`) sets Neovim's `got_int`
+---flag. Telescope's teardown then `nvim_buf_delete`s the preview buffer; if the
+---buffer has a Treesitter highlighter, its `destroy()` runs `nvim_buf_call()`
+---(highlighter.lua:194), and any `nvim_buf_call` with a pending interrupt
+---raises "Keyboard interrupt". Detaching Treesitter beforehand doesn't help:
+---the LanguageTree still fires `on_detach` -> `destroy()` a second time during
+---the delete. Setting `syntax` (instead of `filetype = 'markdown'`) skips the
+---`FileType` autocmd that starts Treesitter entirely, so no highlighter exists
+---to tear down and the delete never calls into Treesitter.
+---@param bufnr integer
+function M.highlight_markdown_preview(bufnr)
+  -- `syntax` fires the `Syntax` (not `FileType`) autocmd, so Treesitter's
+  -- default `FileType`-based `vim.treesitter.start` never attaches here.
+  vim.bo[bufnr].syntax = 'markdown'
+end
+
 --- Shared actions ----------------------------------------------------------
 
 ---Resume in a terminal (default action).

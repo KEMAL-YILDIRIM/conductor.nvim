@@ -42,6 +42,68 @@ local state = {
 }
 
 local namespace = vim.api.nvim_create_namespace 'conductor_browser'
+---Separate namespace for the selected-row wash so it can be redrawn on every
+---cursor move without touching the (expensive) list render's extmarks.
+local cursor_namespace = vim.api.nvim_create_namespace 'conductor_browser_cursor'
+
+---Paint the current list row with the selected-row wash. Driven by an extmark
+---(not the built-in 'cursorline') because `line_hl_group` stripes otherwise win
+---the priority tie and hide CursorLine on striped rows. Higher priority than
+---the stripes guarantees the selected row is always visible.
+local function highlight_cursor_line()
+  if state.list_buf == nil or not vim.api.nvim_buf_is_valid(state.list_buf) then
+    return
+  end
+  vim.api.nvim_buf_clear_namespace(state.list_buf, cursor_namespace, 0, -1)
+  if state.list_win == nil or not vim.api.nvim_win_is_valid(state.list_win) then
+    return
+  end
+  local row = vim.api.nvim_win_get_cursor(state.list_win)[1]
+  vim.api.nvim_buf_set_extmark(state.list_buf, cursor_namespace, row - 1, 0, {
+    line_hl_group = 'ConductorBrowserCursorLine',
+    priority = 200,
+  })
+end
+
+---Define the zebra-stripe highlight as a subtle tint of `Normal` (lighter on
+---dark themes, darker on light themes) so alternating session rows are easy to
+---scan, plus `ConductorBrowserCursorLine` — a distinct, subtle cyan wash for
+---the selected row so it stands out from the stripes without being vibrant.
+---Both use `default = true` so user-provided groups win; re-run on ColorScheme
+---so they track the active theme.
+local function ensure_highlights()
+  local normal = vim.api.nvim_get_hl(0, { name = 'Normal', link = false })
+  local bg = normal.bg
+
+  ---Split a 0xRRGGBB integer into r, g, b components.
+  local function split(color)
+    return math.floor(color / 0x10000) % 0x100, math.floor(color / 0x100) % 0x100, color % 0x100
+  end
+  local function clamp(v)
+    return math.max(0, math.min(255, math.floor(v + 0.5)))
+  end
+  ---Blend `accent` into `base` by `alpha` (0..1 = accent weight).
+  local function blend(base, accent, alpha)
+    local br, bg_, bb = split(base)
+    local ar, ag, ab = split(accent)
+    return clamp(br + (ar - br) * alpha) * 0x10000
+      + clamp(bg_ + (ag - bg_) * alpha) * 0x100
+      + clamp(bb + (ab - bb) * alpha)
+  end
+
+  local stripe, cursor
+  if type(bg) == 'number' then
+    local r, g, b = split(bg)
+    local luminance = 0.299 * r + 0.587 * g + 0.114 * b
+    -- Stripe: nudge Normal a touch lighter (dark themes) / darker (light).
+    local delta = luminance < 128 and 14 or -14
+    stripe = clamp(r + delta) * 0x10000 + clamp(g + delta) * 0x100 + clamp(b + delta)
+    -- Selected row: a subtle cyan wash blended into Normal (distinct, not vibrant).
+    cursor = blend(bg, 0x2fb6c9, 0.26)
+  end
+  vim.api.nvim_set_hl(0, 'ConductorBrowserStripe', { bg = stripe, default = true })
+  vim.api.nvim_set_hl(0, 'ConductorBrowserCursorLine', { bg = cursor, default = true })
+end
 
 ---Fold expression for the list panel: each project header starts a fold that
 ---contains its indented session lines. Blank separator lines between groups
@@ -102,8 +164,11 @@ local function render_list()
   local lines = {}
   ---@type { line: integer, group: string }[]
   local highlights = {}
-  ---@type integer[] lines (0-based) whose leading `/id ` token gets concealed
+  ---@type { line: integer, start: integer, stop: integer }[] lines (0-based)
+  ---whose `/id ` token gets concealed, with the concealed span's columns
   local conceal_lines = {}
+  ---@type integer[] lines (0-based) that get the alternating zebra-stripe tint
+  local stripe_lines = {}
   state.line_to_session = {}
   state.edit_index = {}
   state.header_index = {}
@@ -130,6 +195,12 @@ local function render_list()
       group.indexes[#group.indexes + 1] = index
     end
 
+    -- The 2 leading spaces are structural: the `^%s` header/session test in
+    -- parse_line/foldexpr needs them. They're fully concealed (together with
+    -- the `/id ` token) so the name sits at column 0 and the zebra stripe /
+    -- selected-row wash fill the row edge-to-edge without a left gap.
+    local indent = '  '
+    local stripe_toggle = false
     for group_index, group in ipairs(groups) do
       if group_index > 1 then
         lines[#lines + 1] = ''
@@ -144,9 +215,14 @@ local function render_list()
         local session = state.sessions[index]
         local edit_id = ('%03d'):format(index)
         state.edit_index[edit_id] = session
-        lines[#lines + 1] = ('  /%s %s'):format(edit_id, session.name:gsub('\n', ' '))
+        lines[#lines + 1] = ('%s/%s %s'):format(indent, edit_id, session.name:gsub('\n', ' '))
         state.line_to_session[#lines] = index
-        conceal_lines[#conceal_lines + 1] = #lines - 1
+        -- Conceal the whole `  /id ` prefix so the name renders at column 0.
+        conceal_lines[#conceal_lines + 1] = { line = #lines - 1, start = 0, stop = #indent + 2 + #edit_id }
+        if stripe_toggle then
+          stripe_lines[#stripe_lines + 1] = #lines - 1
+        end
+        stripe_toggle = not stripe_toggle
       end
     end
   end
@@ -162,10 +238,20 @@ local function render_list()
   for _, highlight in ipairs(highlights) do
     vim.hl.range(state.list_buf, namespace, highlight.group, { highlight.line, 0 }, { highlight.line, -1 })
   end
-  -- Conceal the `  /007 ` prefix so only the session name shows.
-  for _, line in ipairs(conceal_lines) do
+  -- Zebra stripes: tint alternating session rows across the full window width
+  -- (line_hl_group fills past EOL) for easier row scanning. Priority is kept
+  -- below CursorLine's built-in DECOR_PRIORITY_BASE (0x1000 = 4096) so the
+  -- selected-row wash still shows on top of a striped row.
+  for _, line in ipairs(stripe_lines) do
     vim.api.nvim_buf_set_extmark(state.list_buf, namespace, line, 0, {
-      end_col = 7, -- '  /' + 3-digit id + ' '
+      line_hl_group = 'ConductorBrowserStripe',
+      priority = 100,
+    })
+  end
+  -- Conceal the `/007 ` id token so only the padding + session name shows.
+  for _, conceal in ipairs(conceal_lines) do
+    vim.api.nvim_buf_set_extmark(state.list_buf, namespace, conceal.line, conceal.start, {
+      end_col = conceal.stop,
       conceal = '',
     })
   end
@@ -175,6 +261,9 @@ local function render_list()
     local status = state.loading_sessions and ' %#Comment#(loading…)' or (editable() and ' %#Comment#(:w applies)' or '')
     vim.wo[state.list_win].winbar = ('%%#Title# Sessions — %s%s'):format(scope, status)
   end
+
+  -- Re-anchor the selected-row wash after the list is rebuilt.
+  highlight_cursor_line()
 end
 
 ---Reload the session list off the main thread (conductor.threadwork), so
@@ -894,7 +983,10 @@ function M.open(opts)
 
     vim.api.nvim_create_autocmd('CursorMoved', {
       buffer = state.list_buf,
-      callback = preview_debounced,
+      callback = function()
+        highlight_cursor_line() -- immediate; no debounce so selection never lags
+        preview_debounced()
+      end,
     })
 
     vim.api.nvim_create_autocmd('BufWriteCmd', {
@@ -902,6 +994,15 @@ function M.open(opts)
       callback = apply_edits,
     })
   end
+
+  ensure_highlights()
+  vim.api.nvim_create_autocmd('ColorScheme', {
+    group = vim.api.nvim_create_augroup('ConductorBrowserHl', { clear = true }),
+    callback = function()
+      ensure_highlights()
+      render_list()
+    end,
+  })
 
   local width = require('conductor.config').options.browser.width
   vim.cmd(('topleft %dvsplit'):format(width))
@@ -912,7 +1013,10 @@ function M.open(opts)
   vim.wo[state.list_win].signcolumn = 'no'
   vim.wo[state.list_win].winfixwidth = true
   vim.wo[state.list_win].wrap = false
-  vim.wo[state.list_win].cursorline = true
+  -- The selected row is painted by a high-priority extmark (highlight_cursor_line)
+  -- instead of the built-in 'cursorline', which loses the priority tie against
+  -- the zebra stripes' line_hl_group and vanishes on striped rows.
+  vim.wo[state.list_win].cursorline = false
   vim.wo[state.list_win].conceallevel = 2
   vim.wo[state.list_win].concealcursor = 'nc'
   -- Fold each project group (header + its sessions) like a normal file.

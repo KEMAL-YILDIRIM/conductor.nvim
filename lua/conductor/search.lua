@@ -183,6 +183,8 @@ local function present_telescope(corpus, by_path, adapter)
     sorter = require('telescope.config').values.generic_sorter {}
   end
 
+  local ns = vim.api.nvim_create_namespace 'conductor_search_preview'
+
   local previewer = previewers.new_buffer_previewer {
     title = 'Conversation Log',
     get_buffer_by_name = function(_, entry)
@@ -194,12 +196,36 @@ local function present_telescope(corpus, by_path, adapter)
         return
       end
       local bufnr = self.state.bufnr
+      local winid = self.state.winid
+      local needle = entry.value.line
       picker_core.preview_lines_async(session, adapter, function(lines)
         if not vim.api.nvim_buf_is_valid(bufnr) then
           return
         end
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-        vim.bo[bufnr].filetype = 'markdown'
+        picker_core.highlight_markdown_preview(bufnr)
+
+        -- Scroll the preview to the matched line so its surrounding context is
+        -- visible, and highlight it. Match on substring so trimmed/rendered
+        -- variants of the corpus line still line up with the preview buffer.
+        if needle and needle ~= '' then
+          local target
+          for lnum, line in ipairs(lines) do
+            if line:find(needle, 1, true) then
+              target = lnum
+              break
+            end
+          end
+          if target then
+            pcall(vim.api.nvim_buf_add_highlight, bufnr, ns, 'TelescopePreviewMatch', target - 1, 0, -1)
+            if winid and vim.api.nvim_win_is_valid(winid) then
+              pcall(vim.api.nvim_win_set_cursor, winid, { target, 0 })
+              vim.api.nvim_win_call(winid, function()
+                vim.cmd 'normal! zz'
+              end)
+            end
+          end
+        end
       end)
     end,
   }

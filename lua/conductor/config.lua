@@ -26,7 +26,7 @@ local defaults = {
   },
   browser = {
     ---Session-list panel width in columns.
-    width = 44,
+    width = 60,
   },
   terminal = {
     ---How to open the resumed session:

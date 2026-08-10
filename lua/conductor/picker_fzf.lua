@@ -32,7 +32,7 @@ local function build_exec_opts(opts, by_line, adapter)
         return
       end
       vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-      vim.bo[bufnr].filetype = 'markdown'
+      picker.highlight_markdown_preview(bufnr)
     end)
     self:set_preview_buf(bufnr)
   end

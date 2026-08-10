@@ -76,7 +76,7 @@ local function session_picker(opts)
           return
         end
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-        vim.bo[bufnr].filetype = 'markdown'
+        picker_core.highlight_markdown_preview(bufnr)
         if vim.api.nvim_win_is_valid(winid) then
           vim.wo[winid].wrap = true
         end
