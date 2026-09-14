@@ -21,6 +21,36 @@ function M.relative_time(unix_time)
   end
 end
 
+---Relative-time label for an ISO 8601 UTC timestamp (e.g. session entry
+---`timestamp`). Coarse buckets only (m/h/d), so the local-offset correction
+---need not be exact. Returns '' when the string can't be parsed.
+---@param iso string|nil
+---@return string
+function M.relative_time_iso(iso)
+  if type(iso) ~= 'string' then
+    return ''
+  end
+  local y, mo, d, h, mi, s = iso:match '(%d+)-(%d+)-(%d+)T(%d+):(%d+):(%d+)'
+  if not y then
+    return ''
+  end
+  local epoch = os.time {
+    year = tonumber(y),
+    month = tonumber(mo),
+    day = tonumber(d),
+    hour = tonumber(h),
+    min = tonumber(mi),
+    sec = tonumber(s),
+    isdst = false,
+  }
+  if not epoch then
+    return ''
+  end
+  -- os.time reads the (UTC) fields as local time; undo the local offset.
+  local offset = os.difftime(os.time(os.date '!*t'), os.time(os.date '*t'))
+  return M.relative_time(epoch - offset)
+end
+
 ---@param cwd string|nil
 ---@return string
 function M.shorten_cwd(cwd)

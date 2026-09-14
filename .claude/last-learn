@@ -1,0 +1,4 @@
+{
+  "timestamp": "2026-02-13T00:00:00Z",
+  "summary": "pi parentId DAG: log_parser now walks to the active branch; browser branch view (gb switcher) via target_leaf + branch-keyed cache; fixed foldexpr/foldtext leak into non-conductor windows."
+}

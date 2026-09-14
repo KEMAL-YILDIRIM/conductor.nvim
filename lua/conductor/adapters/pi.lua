@@ -99,6 +99,7 @@ function M.list_sessions(opts)
                 cwd = cwd,
                 mtime = stat.mtime.sec,
                 message_count = meta.message_count,
+                forked = meta.forked,
                 adapter = 'pi',
               }
             end

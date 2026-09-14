@@ -1,9 +1,18 @@
 ---Session browser: persistent left panel listing sessions (cwd by default),
 ---navigation renders the conversation in the main window on the right with
----collapsible tool-call entries.
+---collapsible tool-call entries. Forked sessions (pi rewind/edit) show a `▸⑂`
+---disclosure badge; `<Tab>` expands their branch tips as nested, selectable
+---child rows *in the list*, grouped under a `⑂ split after: …` label showing
+---the main-branch message each set diverged from (the newest/main tip is the
+---trunk, tagged `(main)`). Moving the cursor onto a tip previews it in the
+---content pane and scrolls to where it split from main (its diverging prompt);
+---`<CR>` opens it (`gb` in the content pane is a switch fallback). Selection
+---renders a tip via `log_parser`'s `target_leaf` + `state.branch_choice`.
 ---
 ---The list panel is editable oil.nvim-style: each session line carries a
 ---concealed `/id` token, project directories are unindented header lines.
+---Expanded branch rows carry a concealed `~NNN` token instead (parse_line
+---returns 'branch'; the `:w` diff ignores them).
 ---Saving the buffer (`:w`) diffs it against the last render and applies the
 ---changes to disk (create / copy / move / rename / delete sessions).
 local M = {}
@@ -29,7 +38,17 @@ local state = {
   ---Maps content-buffer line numbers to entry indexes (tool entries only).
   tool_lines = {}, ---@type table<integer, integer>
   ---Parsed entries cache keyed by path (expanded flags persist while browsing).
-  entry_cache = {}, ---@type table<string, { mtime: integer, meta: ConductorSessionMeta, entries: ConductorLogEntry[] }>
+  entry_cache = {}, ---@type table<string, { mtime: integer, meta: ConductorSessionMeta, entries: ConductorLogEntry[], leaf: string|nil }>
+  ---Chosen branch tip per session path; nil = newest (default). Lets a forked
+  ---session render an abandoned/alternative branch instead of the live one.
+  branch_choice = {}, ---@type table<string, string>
+  ---Forked-session paths whose branch tips are expanded (listed) in the left
+  ---panel, so tips can be browsed/selected without opening the content pane.
+  branch_expanded = {}, ---@type table<string, boolean>
+  ---Cached branch tips per path (mtime-checked), populated on first expand.
+  branch_leaves = {}, ---@type table<string, { mtime: integer, leaves: ConductorBranchLeaf[] }>
+  ---List-row token (`~NNN`) -> the branch it selects. Rebuilt every render.
+  branch_index = {}, ---@type table<string, { path: string, leaf: string, newest: boolean }>
   current_path = nil, ---@type string|nil
   preview_generation = 0,
   ---Bumped on every refresh_sessions() call; guards against a stale async
@@ -109,8 +128,14 @@ end
 ---contains its indented session lines. Blank separator lines between groups
 ---are left at level 0 so groups stay visually distinct when unfolded.
 ---Wired up via `vim.wo.foldexpr = "v:lua.require'conductor.browser'.foldexpr()"`.
+---`foldexpr`/`foldtext` are window-local and *inherited by new splits*, so a
+---window spawned off the browser carries these until overridden. Guard on the
+---conductor filetype so a leak into another buffer never folds by our rules.
 ---@return string
 function M.foldexpr()
+  if vim.bo.filetype ~= 'conductor' then
+    return '0' -- leaked into a non-conductor window: defer to its own folding
+  end
   local lnum = vim.v.lnum
   local line = vim.api.nvim_buf_get_lines(0, lnum - 1, lnum, false)[1] or ''
   if line:match '^%s*$' then
@@ -125,6 +150,9 @@ end
 ---Foldtext for a collapsed project group: the header path plus a session count.
 ---@return string
 function M.foldtext()
+  if vim.bo.filetype ~= 'conductor' then
+    return vim.fn.foldtext() -- leaked into a non-conductor window: default text
+  end
   local start_line = vim.v.foldstart
   local end_line = vim.v.foldend
   local header = vim.api.nvim_buf_get_lines(0, start_line - 1, start_line, false)[1] or ''
@@ -156,6 +184,26 @@ local function editable()
   return state.adapter ~= nil and state.adapter.fs ~= nil and state.adapter.sessions_root ~= nil
 end
 
+---Branch tips for a forked session, newest first. Parses the log on the main
+---thread (a deliberate, infrequent expand action) and caches by mtime.
+---@param session ConductorSession
+---@return ConductorBranchLeaf[]
+local function branch_leaves_for(session)
+  local stat = vim.uv.fs_stat(session.path)
+  local mtime = stat and stat.mtime.sec or 0
+  local cached = state.branch_leaves[session.path]
+  if cached and cached.mtime == mtime then
+    return cached.leaves
+  end
+  local leaves = {}
+  if state.adapter and state.adapter.parse_log then
+    local meta = state.adapter.parse_log(session.path)
+    leaves = (meta and meta.leaves) or {}
+  end
+  state.branch_leaves[session.path] = { mtime = mtime, leaves = leaves }
+  return leaves
+end
+
 local function render_list()
   if not buf_valid(state.list_buf) then
     return
@@ -169,9 +217,14 @@ local function render_list()
   local conceal_lines = {}
   ---@type integer[] lines (0-based) that get the alternating zebra-stripe tint
   local stripe_lines = {}
+  ---@type { line: integer, col: integer }[] forked-session rows (0-based) +
+  ---name-start column that get the `⑂` badge in front of the name
+  local branch_badge_lines = {}
+  local branch_seq = 0
   state.line_to_session = {}
   state.edit_index = {}
   state.header_index = {}
+  state.branch_index = {}
 
   if state.loading_sessions and #state.sessions == 0 then
     lines[#lines + 1] = '  loading sessions…'
@@ -219,10 +272,84 @@ local function render_list()
         state.line_to_session[#lines] = index
         -- Conceal the whole `  /id ` prefix so the name renders at column 0.
         conceal_lines[#conceal_lines + 1] = { line = #lines - 1, start = 0, stop = #indent + 2 + #edit_id }
+        -- Forked sessions get a `⑂` badge in front of the name (inline virtual
+        -- text at the name's start column, so the editable row text stays clean
+        -- for `:w` rename diffing). The `  /id ` prefix before it is concealed.
+        if session.forked then
+          local expanded = state.branch_expanded[session.path]
+          branch_badge_lines[#branch_badge_lines + 1] = {
+            line = #lines - 1,
+            col = #indent + 2 + #edit_id,
+            text = (expanded and '▾' or '▸') .. '⑂ ',
+          }
+        end
         if stripe_toggle then
           stripe_lines[#stripe_lines + 1] = #lines - 1
         end
         stripe_toggle = not stripe_toggle
+        -- Expanded forked session: list its branch tips as nested, selectable
+        -- child rows (parsed on demand), grouped by the point they split from
+        -- the main branch so the divergence is obvious. Every child row (and
+        -- the inert group labels) carries a concealed `  ~NNN ` token so
+        -- parse_line returns 'branch' and the editable `:w` diff ignores them.
+        if session.forked and state.branch_expanded[session.path] then
+          local active_leaf = state.branch_choice[session.path]
+          local function truncate(text, max)
+            text = (text ~= nil and text ~= '') and text or '(no prompt)'
+            if #text > max then
+              text = text:sub(1, max - 1) .. '…'
+            end
+            return text
+          end
+          ---Emit a concealed-token row (`indent` prefix hidden, `visible` shown).
+          ---When `target` is given the row is a selectable branch tip.
+          local function emit_row(visible, target)
+            branch_seq = branch_seq + 1
+            local token = ('%03d'):format(branch_seq)
+            if target then
+              state.branch_index[token] = target
+            end
+            lines[#lines + 1] = ('%s~%s %s'):format(indent, token, visible)
+            conceal_lines[#conceal_lines + 1] = { line = #lines - 1, start = 0, stop = #indent + 1 + #token + 1 }
+          end
+          local function tip_row(leaf, is_main, deeper)
+            local viewing = (active_leaf == nil and leaf.active) or active_leaf == leaf.id
+            local marker = viewing and '●' or '○'
+            local when = leaf.timestamp and (' · ' .. picker.relative_time_iso(leaf.timestamp)) or ''
+            local tag = is_main and '  (main)' or ''
+            emit_row(('%s%s %s%s%s'):format(deeper and '        ' or '    ', marker, truncate(leaf.text, 40), when, tag), {
+              path = session.path,
+              leaf = leaf.id,
+              newest = leaf.active,
+              -- Selecting a non-main tip scrolls the content pane to this tip's
+              -- diverging prompt (where it split from the main branch).
+              jump = (not leaf.active) and leaf.text ~= '' and leaf.text or nil,
+            })
+          end
+
+          local tips = branch_leaves_for(session)
+          if tips[1] then
+            tip_row(tips[1], true, false) -- the main / newest tip = the trunk
+          end
+          -- Group the remaining tips by their fork point, preserving order.
+          local order, groups = {}, {}
+          for i = 2, #tips do
+            local key = tips[i].fork_id or ''
+            if not groups[key] then
+              groups[key] = { fork_text = tips[i].fork_text, tips = {} }
+              order[#order + 1] = key
+            end
+            local g = groups[key]
+            g.tips[#g.tips + 1] = tips[i]
+          end
+          for _, key in ipairs(order) do
+            local g = groups[key]
+            emit_row(('    ⑂ split after: %s'):format(truncate(g.fork_text, 36)))
+            for _, leaf in ipairs(g.tips) do
+              tip_row(leaf, false, true)
+            end
+          end
+        end
       end
     end
   end
@@ -246,6 +373,15 @@ local function render_list()
     vim.api.nvim_buf_set_extmark(state.list_buf, namespace, line, 0, {
       line_hl_group = 'ConductorBrowserStripe',
       priority = 100,
+    })
+  end
+  -- Disclosure `▸⑂`/`▾⑂` badge in front of forked-session names (inline virt
+  -- text only, so the editable row text stays clean for `:w` rename diffing).
+  for _, badge in ipairs(branch_badge_lines) do
+    vim.api.nvim_buf_set_extmark(state.list_buf, namespace, badge.line, badge.col, {
+      virt_text = { { badge.text, 'Comment' } },
+      virt_text_pos = 'inline',
+      priority = 120,
     })
   end
   -- Conceal the `/007 ` id token so only the padding + session name shows.
@@ -301,6 +437,10 @@ local function parse_line(line)
     return 'blank', nil, ''
   end
   if line:match '^%s' then
+    local branch_id = line:match '^%s*~(%d+)'
+    if branch_id then
+      return 'branch', branch_id, '' -- expanded branch tip row (non-editable)
+    end
     local edit_id, name = line:match '^%s*/(%d+)%s?(.*)$'
     if edit_id then
       return 'session', edit_id, vim.trim(name)
@@ -317,9 +457,51 @@ local function session_at_cursor()
   end
   local row = vim.api.nvim_win_get_cursor(state.list_win)[1]
   local line = vim.api.nvim_buf_get_lines(state.list_buf, row - 1, row, false)[1] or ''
-  local kind, edit_id = parse_line(line)
-  if kind == 'session' and edit_id then
-    return state.edit_index[edit_id]
+  local kind, id = parse_line(line)
+  if kind == 'session' and id then
+    return state.edit_index[id]
+  end
+  -- On an expanded branch row, g-actions (resume/attach/…) target its parent.
+  if kind == 'branch' then
+    local target = state.branch_index[id]
+    if target then
+      for _, session in ipairs(state.sessions) do
+        if session.path == target.path then
+          return session
+        end
+      end
+    end
+  end
+  return nil
+end
+
+---Resolve the (session, branch tip) the cursor points at. On a plain session
+---row the tip is nil (newest / default render); on an expanded branch row it is
+---that tip's leaf id (nil when the row is the newest tip). The third value is
+---the tip's diverging-prompt text (nil for the main tip / session rows) so the
+---caller can scroll the content pane to the split. Returns nil when the cursor
+---is not on a selectable row.
+---@return ConductorSession|nil session, string|nil leaf, string|nil jump
+local function branch_target_at_cursor()
+  if not win_valid(state.list_win) then
+    return nil
+  end
+  local row = vim.api.nvim_win_get_cursor(state.list_win)[1]
+  local line = vim.api.nvim_buf_get_lines(state.list_buf, row - 1, row, false)[1] or ''
+  local kind, id = parse_line(line)
+  if kind == 'branch' then
+    local target = state.branch_index[id]
+    if target then
+      for _, session in ipairs(state.sessions) do
+        if session.path == target.path then
+          return session, (not target.newest) and target.leaf or nil, target.jump
+        end
+      end
+    end
+    return nil
+  end
+  if kind == 'session' and id then
+    return state.edit_index[id], nil
   end
   return nil
 end
@@ -497,14 +679,16 @@ end
 
 --- Content rendering (main panel) -------------------------------------------
 
----Cached parse for `session.path`, if any (regardless of freshness).
+---Cached parse for `session.path`, if any (regardless of freshness). A cache
+---entry is only valid for the currently-chosen branch tip, so switching
+---branches re-parses rather than serving the previously-rendered branch.
 ---@param session ConductorSession
----@return { mtime: integer, meta: ConductorSessionMeta, entries: ConductorLogEntry[] }|nil
+---@return { mtime: integer, meta: ConductorSessionMeta, entries: ConductorLogEntry[], leaf: string|nil }|nil
 local function cached_entries(session)
   local stat = vim.uv.fs_stat(session.path)
   local mtime = stat and stat.mtime.sec or 0
   local cached = state.entry_cache[session.path]
-  if cached and cached.mtime == mtime then
+  if cached and cached.mtime == mtime and cached.leaf == state.branch_choice[session.path] then
     return cached
   end
   return nil
@@ -524,10 +708,21 @@ local function parsed_entries_async(session, callback)
 
   local stat = vim.uv.fs_stat(session.path)
   local mtime = stat and stat.mtime.sec or 0
+  local leaf = state.branch_choice[session.path]
+
+  -- A chosen (non-newest) branch parses on the main thread: it is a deliberate,
+  -- infrequent action, and the adapter's async transport only ever renders the
+  -- newest tip. Small cost, and it keeps the async path (below) unchanged.
+  if leaf then
+    local meta, entries = state.adapter.parse_log(session.path, { target_leaf = leaf })
+    state.entry_cache[session.path] = { mtime = mtime, meta = meta, entries = entries, leaf = leaf }
+    callback(meta, entries)
+    return
+  end
 
   if not state.adapter.parse_log_async then
     local meta, entries = state.adapter.parse_log(session.path)
-    state.entry_cache[session.path] = { mtime = mtime, meta = meta, entries = entries }
+    state.entry_cache[session.path] = { mtime = mtime, meta = meta, entries = entries, leaf = nil }
     callback(meta, entries)
     return
   end
@@ -538,7 +733,7 @@ local function parsed_entries_async(session, callback)
       callback({ message_count = 0 }, {})
       return
     end
-    state.entry_cache[session.path] = { mtime = mtime, meta = result_or_error.meta, entries = result_or_error.entries }
+    state.entry_cache[session.path] = { mtime = mtime, meta = result_or_error.meta, entries = result_or_error.entries, leaf = nil }
     callback(result_or_error.meta, result_or_error.entries)
   end)
 end
@@ -547,6 +742,28 @@ end
 ---@param entries ConductorLogEntry[]
 ---@param session ConductorSession
 ---@return string[] lines, table<integer, integer> tool_lines
+---Expand any *tool* entry whose visible-when-collapsed text does not already
+---contain `query` but whose folded `output` (or `summary`) does, so a match the
+---cross-session grep found inside collapsed tool output becomes visible after a
+---`reveal`. Case-insensitive substring, mirroring the search index.
+---@param entries ConductorLogEntry[]
+---@param query string
+local function expand_matching_tools(entries, query)
+  local needle = query:lower()
+  if needle == '' then
+    return
+  end
+  for _, entry in ipairs(entries) do
+    if entry.role == 'tool' and not entry.expanded then
+      local output = entry.output or ''
+      local summary = entry.summary or ''
+      if output:lower():find(needle, 1, true) or summary:lower():find(needle, 1, true) then
+        entry.expanded = true
+      end
+    end
+  end
+end
+
 local function render_content_lines(meta, entries, session)
   local lines = {}
   local tool_lines = {}
@@ -655,6 +872,23 @@ local function jump_tool(direction)
   end
 end
 
+---The session currently rendered in the content panel, if any.
+---@return ConductorSession|nil
+local function current_session()
+  if not state.current_path then
+    return nil
+  end
+  for _, candidate in ipairs(state.sessions) do
+    if candidate.path == state.current_path then
+      return candidate
+    end
+  end
+  return nil
+end
+
+-- Forward declaration: assigned after show_session (which it calls to re-render).
+local switch_branch
+
 local function ensure_content_buf()
   if buf_valid(state.content_buf) then
     return
@@ -676,6 +910,9 @@ local function ensure_content_buf()
   config.map('browser_content', 'prev_tool', 'n', function()
     jump_tool(-1)
   end, vim.tbl_extend('force', options, { desc = 'Conductor: previous tool call' }))
+  config.map('browser_content', 'switch_branch', 'n', function()
+    switch_branch()
+  end, vim.tbl_extend('force', options, { desc = 'Conductor: switch branch' }))
   config.map('browser_content', 'close', 'n', function()
     M.close()
   end, vim.tbl_extend('force', options, { desc = 'Conductor: close browser' }))
@@ -720,6 +957,26 @@ local function set_content_lines(buffer_lines)
   vim.bo[state.content_buf].modifiable = false
 end
 
+---Scroll the content window to the first line containing `query` and centre it,
+---*without* changing the focused window (so it works from a list-cursor hover).
+---Best-effort: a miss leaves the view untouched.
+---@param query string
+local function scroll_content_to(query)
+  if not win_valid(state.content_win) or not buf_valid(state.content_buf) then
+    return
+  end
+  local lines = vim.api.nvim_buf_get_lines(state.content_buf, 0, -1, false)
+  for i, line in ipairs(lines) do
+    if line ~= '' and line:find(query, 1, true) then
+      pcall(vim.api.nvim_win_set_cursor, state.content_win, { i, 0 })
+      vim.api.nvim_win_call(state.content_win, function()
+        vim.cmd 'normal! zz'
+      end)
+      return
+    end
+  end
+end
+
 ---Render a session into the main panel. Parsing happens off the main thread
 ---(see `parsed_entries_async`); a lightweight placeholder is shown
 ---immediately so switching sessions never stalls the UI, and the real
@@ -728,7 +985,11 @@ end
 ---moved to a different session.
 ---@param session ConductorSession
 ---@param on_ready fun()|nil called once the *final* content is rendered (cached or async)
-local function show_session(session, on_ready)
+---@param session ConductorSession
+---@param on_ready fun()|nil
+---@param expand_query string|nil when set, tool entries whose folded output/
+---  summary contain it are expanded before render so a grep match is visible.
+local function show_session(session, on_ready, expand_query)
   ensure_content_buf()
   ensure_content_win()
 
@@ -740,6 +1001,9 @@ local function show_session(session, on_ready)
   local picker = require 'conductor.picker'
   local cached = cached_entries(session)
   if cached then
+    if expand_query then
+      expand_matching_tools(cached.entries, expand_query)
+    end
     local lines, tool_lines = render_content_lines(cached.meta, cached.entries, session)
     state.tool_lines = tool_lines
     set_content_lines(lines)
@@ -768,12 +1032,54 @@ local function show_session(session, on_ready)
     if generation ~= state.content_generation or state.current_path ~= session.path then
       return -- superseded by a newer show_session() call
     end
+    if expand_query then
+      expand_matching_tools(entries, expand_query)
+    end
     local lines, tool_lines = render_content_lines(meta, entries, session)
     state.tool_lines = tool_lines
     set_content_lines(lines)
     if on_ready then
       on_ready()
     end
+  end)
+end
+
+---Render branch tip `leaf_id` for `session`. Choosing the newest tip clears
+---the override so the fast async path resumes serving it; any other tip is
+---pinned (`branch_choice`) so re-renders keep showing it.
+---@param session ConductorSession
+---@param leaf_id string
+local function apply_branch(session, leaf_id)
+  local cached = state.entry_cache[session.path]
+  local newest = cached and cached.meta and cached.meta.leaves and cached.meta.leaves[1]
+  state.branch_choice[session.path] = (newest and leaf_id == newest.id) and nil or leaf_id
+  show_session(session)
+end
+
+---Pick which branch tip (rewind/edit fork) fills the content panel. No-op for
+---linear sessions. Assigns the forward-declared `switch_branch` upvalue.
+function switch_branch()
+  local session = current_session()
+  if not session then
+    return
+  end
+  local cached = state.entry_cache[session.path]
+  local leaves = cached and cached.meta and cached.meta.leaves
+  if not leaves or #leaves < 2 then
+    vim.notify('conductor: session has a single branch', vim.log.levels.INFO)
+    return
+  end
+  vim.ui.select(leaves, {
+    prompt = 'Switch branch:',
+    format_item = function(leaf)
+      local excerpt = (leaf.text ~= nil and leaf.text ~= '') and leaf.text or '(no prompt)'
+      return ('%s %s'):format(leaf.active and '●' or '○', excerpt)
+    end,
+  }, function(choice)
+    if not choice then
+      return
+    end
+    apply_branch(session, choice.id)
   end)
 end
 
@@ -817,9 +1123,17 @@ local function preview_debounced()
     if generation ~= state.preview_generation or not win_valid(state.list_win) then
       return
     end
-    local session = session_at_cursor()
-    if session and session.path ~= state.current_path then
-      show_session(session)
+    local session, leaf, jump = branch_target_at_cursor()
+    if session then
+      -- Only re-render when the target (session *or* branch tip) changed.
+      if session.path == state.current_path and state.branch_choice[session.path] == leaf then
+        return
+      end
+      state.branch_choice[session.path] = leaf
+      -- On a branch tip, scroll to where it split from main once rendered.
+      show_session(session, jump and function()
+        scroll_content_to(jump)
+      end or nil)
     end
   end, 80)
 end
@@ -900,14 +1214,29 @@ local function setup_list_keymaps()
   local options = { buffer = state.list_buf, nowait = true }
 
   config.map('browser_list', 'open', 'n', function()
-    local session = session_at_cursor()
+    -- Opens the content the cursor points at (a session, or a specific branch
+    -- tip on an expanded row) and focuses the content window. Expanding a
+    -- forked session's branches is `<Tab>` (toggle_branches), not `<CR>`.
+    local session, leaf, jump = branch_target_at_cursor()
     if session then
-      show_session(session)
+      state.branch_choice[session.path] = leaf
+      show_session(session, jump and function()
+        scroll_content_to(jump)
+      end or nil)
       if win_valid(state.content_win) then
         vim.api.nvim_set_current_win(state.content_win)
       end
     end
   end, vim.tbl_extend('force', options, { desc = 'Conductor: open session content' }))
+
+  config.map('browser_list', 'toggle_branches', 'n', function()
+    local session = session_at_cursor()
+    if session and session.forked then
+      state.branch_expanded[session.path] = not state.branch_expanded[session.path] or nil
+      render_list()
+      locate_in_list(session)
+    end
+  end, vim.tbl_extend('force', options, { desc = 'Conductor: expand / collapse branches' }))
 
   -- g-prefixed actions: the buffer is editable, so bare r/a/o/c must stay
   -- available as normal editing commands (oil.nvim-style).
@@ -1057,7 +1386,7 @@ function M.reveal(session, query)
       if query and query ~= '' then
         jump_to_query(query)
       end
-    end)
+    end, query)
     locate_in_list(session)
   end
   if opening then

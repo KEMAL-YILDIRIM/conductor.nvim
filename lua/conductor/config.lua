@@ -70,6 +70,7 @@ local defaults = {
     ---Session browser list panel (`:Conductor browse`).
     browser_list = {
       open = '<CR>', ---Open the session content in the main window.
+      toggle_branches = '<Tab>', ---Expand/collapse a forked session's branch tips in the list.
       resume = 'gr', ---Resume the session in a terminal.
       attach = 'ga', ---Attach as a managed (headless RPC) instance.
       open_raw = 'go', ---Open the raw log file.
@@ -84,6 +85,7 @@ local defaults = {
       toggle_tool = '<CR>', ---Toggle tool-call output under the cursor.
       next_tool = ']t', ---Jump to the next tool call.
       prev_tool = '[t', ---Jump to the previous tool call.
+      switch_branch = 'gb', ---Switch which branch (conversation tip) is shown.
       close = 'q', ---Close the browser.
     },
     ---Live sessions sidebar (`:Conductor panel`).

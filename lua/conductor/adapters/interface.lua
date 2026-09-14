@@ -27,6 +27,7 @@
 ---@field cwd string|nil project working directory the session belongs to
 ---@field mtime integer last-modified unix time (recency sort key)
 ---@field message_count integer
+---@field forked boolean|nil session forks into >1 branch tip (rewind/edit)
 ---@field adapter string adapter name owning this session
 ---
 ---@class ConductorAdapter
