@@ -24,7 +24,8 @@ local M = {}
 ---@field id string|nil
 ---@field name string|nil display name from session_info entries
 ---@field cwd string|nil
----@field created string|nil ISO timestamp
+---@field created string|nil ISO timestamp of the session header (start time)
+---@field last_activity string|nil ISO timestamp of the most recent entry (last-used time)
 ---@field message_count integer user+assistant messages on the active branch
 ---@field first_user_text string|nil
 ---@field branch_count integer number of conversation tips (1 = linear session)
@@ -239,6 +240,11 @@ function M.parse(path, opts)
       local ok, entry = pcall(vim.json.decode, line)
       if ok and type(entry) == 'table' then
         decoded[#decoded + 1] = entry
+        -- Newest entry timestamp = last-activity (see scan_meta); tracked here so
+        -- the content path reports the same copy/move-proof time as the listing.
+        if type(entry.timestamp) == 'string' and (not meta.last_activity or entry.timestamp > meta.last_activity) then
+          meta.last_activity = entry.timestamp
+        end
       end
     end
   end
@@ -344,6 +350,13 @@ function M.scan_meta(path)
 
   for line in file:lines() do
     if line ~= '' then
+      -- Last-activity = the newest entry timestamp. ISO-8601 UTC strings sort
+      -- lexicographically the same as chronologically, so a string max suffices
+      -- (cheap: matched without decoding the line). Copy/move-proof, unlike mtime.
+      local ts = line:match '"timestamp":"([^"]+)"'
+      if ts and (not meta.last_activity or ts > meta.last_activity) then
+        meta.last_activity = ts
+      end
       if line:find('"type":"session"', 1, true) then
         local ok, entry = pcall(vim.json.decode, line)
         if ok and type(entry) == 'table' then

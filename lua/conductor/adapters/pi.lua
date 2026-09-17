@@ -62,6 +62,36 @@ local function decode_cwd_dir(dir_name)
   return decoded ~= '' and decoded or dir_name
 end
 
+---Convert an ISO-8601 UTC timestamp (e.g. '2026-05-11T09:37:07.037Z') to unix
+---seconds. Uses only stdlib os.time/os.date, so it also runs in the threadpool
+---worker. Returns nil when the string can't be parsed.
+---@param iso string|nil
+---@return integer|nil
+local function iso_to_epoch(iso)
+  if type(iso) ~= 'string' then
+    return nil
+  end
+  local y, mo, d, h, mi, s = iso:match '(%d+)-(%d+)-(%d+)T(%d+):(%d+):(%d+)'
+  if not y then
+    return nil
+  end
+  local epoch = os.time {
+    year = tonumber(y),
+    month = tonumber(mo),
+    day = tonumber(d),
+    hour = tonumber(h),
+    min = tonumber(mi),
+    sec = tonumber(s),
+    isdst = false,
+  }
+  if not epoch then
+    return nil
+  end
+  -- os.time reads the (UTC) fields as local time; undo the local offset.
+  local offset = os.difftime(os.time(os.date '!*t'), os.time(os.date '*t'))
+  return epoch - offset
+end
+
 ---Uses `vim.fs.dir` (not `vim.fn.glob`) so this walk works unchanged inside
 ---a threadpool worker, where `vim.fn` is unavailable.
 ---@param opts { cwd?: string, sessions_dir?: string }|nil `sessions_dir` overrides config/env lookup (needed off the main thread)
@@ -98,6 +128,12 @@ function M.list_sessions(opts)
                 name = meta.name or first_line,
                 cwd = cwd,
                 mtime = stat.mtime.sec,
+                created = meta.created,
+                last_activity = meta.last_activity,
+                -- Prefer the in-file last-activity time (copy/move-proof) over the
+                -- filesystem mtime, which a copy/move resets; fall back to mtime
+                -- only when the session carries no parseable timestamp.
+                sort_time = iso_to_epoch(meta.last_activity) or stat.mtime.sec,
                 message_count = meta.message_count,
                 forked = meta.forked,
                 adapter = 'pi',
@@ -110,7 +146,7 @@ function M.list_sessions(opts)
   end
 
   table.sort(sessions, function(a, b)
-    return a.mtime > b.mtime
+    return a.sort_time > b.sort_time
   end)
   return sessions
 end

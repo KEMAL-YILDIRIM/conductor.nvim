@@ -774,8 +774,14 @@ local function render_content_lines(meta, entries, session)
   end
 
   local picker = require 'conductor.picker'
+  -- Relative label from an in-file ISO timestamp (copy/move-proof), falling back
+  -- to the filesystem mtime only when the session carries no such timestamp.
+  local function when(iso)
+    local label = iso and picker.relative_time_iso(iso) or ''
+    return label ~= '' and label or picker.relative_time(session.mtime)
+  end
   add(('# %s'):format(session.name))
-  add(('%s · %d msg'):format(picker.relative_time(session.mtime), meta.message_count))
+  add(('created %s · updated %s · %d msg'):format(when(meta.created), when(meta.last_activity), meta.message_count))
   if meta.cwd then
     add(('cwd: %s'):format(meta.cwd))
   end
@@ -1008,7 +1014,11 @@ local function show_session(session, on_ready, expand_query)
     state.tool_lines = tool_lines
     set_content_lines(lines)
   else
-    set_content_lines { ('# %s'):format(session.name), ('%s · loading…'):format(picker.relative_time(session.mtime)) }
+    local loading_when = session.last_activity and picker.relative_time_iso(session.last_activity) or ''
+    if loading_when == '' then
+      loading_when = picker.relative_time(session.mtime)
+    end
+    set_content_lines { ('# %s'):format(session.name), ('%s · loading…'):format(loading_when) }
   end
 
   if win_valid(state.content_win) then

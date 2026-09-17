@@ -25,7 +25,9 @@
 ---@field path string absolute path to the session log file
 ---@field name string display name (session name or first prompt excerpt)
 ---@field cwd string|nil project working directory the session belongs to
----@field mtime integer last-modified unix time (recency sort key)
+---@field mtime integer last-modified unix time (fallback recency key when timestamps are absent)
+---@field created string|nil ISO timestamp of the session start (from session data, copy/move-proof)
+---@field last_activity string|nil ISO timestamp of the most recent entry (from session data, copy/move-proof)
 ---@field message_count integer
 ---@field forked boolean|nil session forks into >1 branch tip (rewind/edit)
 ---@field adapter string adapter name owning this session
