@@ -354,10 +354,43 @@ local function render_list()
     end
   end
 
+  -- Rewriting every line discards the window's folds and Neovim rebuilds them
+  -- from foldexpr; in a live UI (Neovim 0.12) the group around the cursor can
+  -- come back closed despite foldlevel=99. So remember which project groups
+  -- the user folded (by header text) and restore exactly those afterwards.
+  local fold_win = win_valid(state.list_win) and vim.api.nvim_win_get_buf(state.list_win) == state.list_buf and state.list_win or nil
+  local folded_headers = {}
+  if fold_win then
+    vim.api.nvim_win_call(fold_win, function()
+      local line_count = vim.api.nvim_buf_line_count(state.list_buf)
+      local lnum = 1
+      while lnum <= line_count do
+        local fold_start = vim.fn.foldclosed(lnum)
+        if fold_start ~= -1 then
+          folded_headers[vim.fn.getline(fold_start)] = true
+          lnum = vim.fn.foldclosedend(lnum) + 1
+        else
+          lnum = lnum + 1
+        end
+      end
+    end)
+  end
+
   vim.bo[state.list_buf].modifiable = true
   vim.api.nvim_buf_set_lines(state.list_buf, 0, -1, false, lines)
   if not editable() then
     vim.bo[state.list_buf].modifiable = false
+  end
+
+  if fold_win then
+    vim.api.nvim_win_call(fold_win, function()
+      vim.cmd 'normal! zX' -- recompute folds and re-apply foldlevel (all open)
+      for lnum, line in ipairs(lines) do
+        if folded_headers[line] and line:match '^%S' then
+          vim.cmd(('silent! %dfoldclose'):format(lnum))
+        end
+      end
+    end)
   end
   vim.bo[state.list_buf].modified = false
 
