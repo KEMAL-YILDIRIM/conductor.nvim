@@ -206,6 +206,8 @@ local function jump_tool(instance, direction)
   end
 end
 
+local ensure_input_buf -- defined below; `set_input` needs it first
+
 ---Send the input buffer contents as a prompt.
 ---@param instance ConductorInstance
 local function submit_input(instance)
@@ -218,14 +220,32 @@ local function submit_input(instance)
   if text == '' then
     return
   end
-  vim.api.nvim_buf_set_lines(view.input_buf, 0, -1, false, {})
-  require('conductor.supervisor').prompt(instance, text)
+  -- Built-in commands may refuse the input (unknown command, agent busy):
+  -- keep the text so it can be fixed instead of retyped.
+  if require('conductor.supervisor').submit(instance, text) then
+    vim.api.nvim_buf_set_lines(view.input_buf, 0, -1, false, {})
+  end
+end
+
+---Replace the input bar's text (e.g. the message restored by `/fork`) and
+---focus it when this instance is the one on screen.
+---@param instance ConductorInstance
+---@param text string
+function M.set_input(instance, text)
+  local view = view_for(instance)
+  local bufnr = ensure_input_buf(instance)
+  local lines = vim.split(text, '\n', { plain = true })
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+  if shell.instance == instance and window_valid(shell.input_win) and vim.api.nvim_win_get_buf(shell.input_win) == view.input_buf then
+    vim.api.nvim_set_current_win(shell.input_win)
+    vim.api.nvim_win_set_cursor(shell.input_win, { #lines, #lines[#lines] })
+  end
 end
 
 ---Ensure the per-instance input buffer (with its keymaps) exists.
 ---@param instance ConductorInstance
 ---@return integer input_buf
-local function ensure_input_buf(instance)
+function ensure_input_buf(instance)
   local view = view_for(instance)
   if buffer_valid(view.input_buf) then
     return view.input_buf
@@ -236,21 +256,36 @@ local function ensure_input_buf(instance)
   vim.bo[view.input_buf].buftype = 'nofile'
   vim.bo[view.input_buf].bufhidden = 'hide'
   vim.bo[view.input_buf].swapfile = false
-  vim.bo[view.input_buf].filetype = 'markdown'
+  -- Own filetype so completion plugins see a dedicated buffer (no markdown
+  -- path/buffer sources on `/`); markdown highlighting via `syntax` only.
+  local completion = require 'conductor.completion'
+  vim.bo[view.input_buf].filetype = completion.FILETYPE
+  vim.bo[view.input_buf].syntax = 'markdown'
+  vim.b[view.input_buf].conductor_instance_id = instance.id
+  completion.attach(view.input_buf)
 
   local config = require 'conductor.config'
   local options = { buffer = view.input_buf, nowait = true }
   config.map('input', 'send', { 'n', 'i' }, function()
+    -- With a completion menu open, <CR> accepts the item instead of sending.
+    if vim.api.nvim_get_mode().mode:sub(1, 1) == 'i' and completion.accept_if_open() then
+      return
+    end
     submit_input(instance)
-  end, vim.tbl_extend('force', options, { desc = 'Conductor: send prompt' }))
+  end, vim.tbl_extend('force', options, { desc = 'Conductor: send prompt / run command' }))
   config.map('input', 'newline', 'i', '<CR>', vim.tbl_extend('force', options, { desc = 'Conductor: newline' }))
   config.map('input', 'focus_log', { 'n', 'i' }, function()
+    completion.close_if_open()
     vim.cmd 'stopinsert'
     if window_valid(shell.log_win) then
       vim.api.nvim_set_current_win(shell.log_win)
     end
   end, vim.tbl_extend('force', options, { desc = 'Conductor: focus log' }))
   config.map('input', 'abort', { 'n', 'i' }, function()
+    -- First press only closes an open completion menu.
+    if completion.close_if_open() then
+      return
+    end
     require('conductor.supervisor').abort(instance)
   end, vim.tbl_extend('force', options, { desc = 'Conductor: stop agent' }))
   config.map('input', 'close', 'n', function()
@@ -386,7 +421,7 @@ function M.open(instance, opts)
   vim.wo[shell.input_win].relativenumber = false
   vim.wo[shell.input_win].signcolumn = 'no'
   vim.wo[shell.input_win].winfixheight = true
-  vim.wo[shell.input_win].winbar = '%#Comment# prompt — <CR> send · <S-CR> newline · <C-c> stop · <C-k> log '
+  vim.wo[shell.input_win].winbar = '%#Comment# prompt — <CR> send · <S-CR> newline · / commands · !cmd shell · <C-c> stop · <C-k> log '
 
   shell.instance = instance
   vim.api.nvim_set_current_win(shell.log_win)

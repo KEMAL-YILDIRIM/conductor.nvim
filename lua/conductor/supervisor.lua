@@ -32,6 +32,9 @@ local function broadcast()
   vim.api.nvim_exec_autocmds('User', { pattern = 'ConductorUpdate', modeline = false })
 end
 
+---Notify listeners (sidebar, chat header) that instance state changed.
+M.broadcast = broadcast
+
 ---@param instance ConductorInstance
 ---@param status string
 local function set_status(instance, status)
@@ -77,7 +80,7 @@ local function on_event(instance, event)
     -- Find the most recent running tool entry for this tool.
     for index = #instance.log, 1, -1 do
       local entry = instance.log[index]
-      if entry.role == 'tool' and entry.running and entry.text == event.name then
+      if entry.role == 'tool' and entry.running and not entry.local_command and entry.text == event.name then
         entry.running = false
         entry.is_error = event.is_error
         entry.output = event.output or ''
@@ -150,6 +153,12 @@ function M.spawn(opts)
   M.instances[instance.id] = instance
   set_status(instance, 'idle')
 
+  -- Warm the slash-command cache so `/` completion and unknown-command
+  -- detection are ready by the time the user types.
+  if adapter.list_commands then
+    adapter.list_commands(instance, function() end)
+  end
+
   -- When attaching to an existing session, preload its on-disk history so the
   -- chat view shows the prior conversation instead of starting blank. Only the
   -- entries already flushed to the log file are available; anything the running
@@ -192,6 +201,55 @@ function M.load_history(instance)
     local _, entries = adapter.parse_log(instance.session_path)
     apply(entries)
   end
+end
+
+---Append an entry to the instance's chat log and refresh the view.
+---@param instance ConductorInstance
+---@param entry ConductorChatEntry
+---@return ConductorChatEntry entry the appended entry (mutate it, then refresh)
+function M.append(instance, entry)
+  instance.log[#instance.log + 1] = entry
+  require('conductor.chatlog').refresh(instance)
+  return entry
+end
+
+---Append a system note (command result, status message) to the chat log.
+---@param instance ConductorInstance
+---@param text string
+function M.note(instance, text)
+  M.append(instance, { role = 'system', text = text })
+end
+
+---Clear the local chat log (after the agent switched to another session).
+---@param instance ConductorInstance
+function M.reset_log(instance)
+  instance.log = {}
+  instance.partial = ''
+  require('conductor.chatlog').refresh(instance)
+end
+
+---Submit one piece of chat input: the adapter may intercept it (built-in slash
+---command, shell shortcut, unknown command), otherwise it goes out as a prompt.
+---@param instance ConductorInstance
+---@param text string trimmed, non-empty input
+---@return boolean consumed false when the input was refused and should stay editable
+function M.submit(instance, text)
+  if not instance.handle then
+    vim.notify('conductor: instance has exited', vim.log.levels.ERROR)
+    return false
+  end
+  local adapter = require('conductor.adapters.interface').get(instance.adapter)
+  if adapter.dispatch_input then
+    local outcome, replacement = adapter.dispatch_input(instance, text)
+    if outcome == 'handled' then
+      return true
+    elseif outcome == 'rejected' then
+      return false
+    end
+    text = replacement or text
+  end
+  M.prompt(instance, text)
+  return true
 end
 
 ---Send a prompt to an instance; records it in the local log.

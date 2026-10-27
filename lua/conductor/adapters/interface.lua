@@ -19,6 +19,7 @@
 ---@field abort fun()
 ---@field kill fun()
 ---@field get_state fun(callback: fun(response: table))
+---@field request nil|fun(command: table, callback?: fun(response: table)): string send an arbitrary harness command; callback gets the reply (success or failure) on the main thread
 ---
 ---@class ConductorSession
 ---@field id string stable identifier (session uuid or file path)
@@ -41,6 +42,8 @@
 ---@field resume_cmd fun(session: ConductorSession): string[] argv to resume the session in a terminal
 ---@field spawn nil|fun(opts: { cwd?: string, session_path?: string, name?: string, ephemeral?: boolean, on_event: fun(event: table), on_exit: fun(code: integer) }): ConductorInstanceHandle
 ---@field sessions_root nil|fun(): string session storage root (required for fs ops)
+---@field dispatch_input nil|fun(instance: ConductorInstance, text: string): 'handled'|'rejected'|'passthrough', string|nil intercept chat input (built-in slash commands, shell shortcuts) before it is sent as a prompt; second return = replacement prompt text
+---@field list_commands nil|fun(instance: ConductorInstance, callback: fun(items: ConductorCommandItem[])) slash commands for `/` completion (may call back synchronously when cached)
 ---@field fs nil|{ copy: fun(root: string, session: ConductorSession, cwd: string, name?: string): boolean, string|nil, move: fun(root: string, session: ConductorSession, cwd: string): boolean, string|nil, delete: fun(path: string): boolean, string|nil, create: fun(root: string, cwd: string, name?: string): boolean, string|nil, rename: fun(path: string, name: string): boolean, string|nil } optional file-level session ops enabling the editable browser
 
 local M = {}

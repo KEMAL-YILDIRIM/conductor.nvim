@@ -37,11 +37,14 @@ local function translate(decoded, emit, pending)
 
   if kind == 'response' then
     if decoded.id and pending[decoded.id] then
+      -- A caller is waiting for this reply: it owns success *and* failure
+      -- reporting, so don't also emit a generic error event.
       local callback = pending[decoded.id]
       pending[decoded.id] = nil
-      callback(decoded)
-    end
-    if decoded.success == false then
+      vim.schedule(function()
+        callback(decoded)
+      end)
+    elseif decoded.success == false then
       emit { type = 'error', message = ('%s failed: %s'):format(decoded.command or '?', decoded.error or 'unknown error') }
     end
   elseif kind == 'agent_start' then
@@ -79,6 +82,24 @@ local function translate(decoded, emit, pending)
       emit { type = 'ui_request', request = decoded }
     end
     -- setStatus/setWidget/setTitle/set_editor_text are TUI cosmetics; ignored.
+  elseif kind == 'compaction_start' then
+    -- Manual compaction (`/compact`) reports through its own command reply.
+    if decoded.reason ~= 'manual' then
+      emit { type = 'notify', message = ('compacting context (%s)…'):format(decoded.reason or '?'), level = 'info' }
+    end
+  elseif kind == 'compaction_end' then
+    if decoded.reason ~= 'manual' then
+      local result = type(decoded.result) == 'table' and decoded.result or {}
+      if decoded.aborted then
+        emit { type = 'notify', message = 'compaction aborted', level = 'warning' }
+      else
+        emit {
+          type = 'notify',
+          message = ('context compacted: %s → %s tokens'):format(tostring(result.tokensBefore or '?'), tostring(result.estimatedTokensAfter or '?')),
+          level = 'info',
+        }
+      end
+    end
   elseif kind == 'auto_retry_start' then
     emit { type = 'notify', message = ('retrying (%d/%d): %s'):format(decoded.attempt or 0, decoded.maxAttempts or 0, decoded.errorMessage or ''), level = 'warning' }
   elseif kind == 'extension_error' then
@@ -152,6 +173,21 @@ function M.spawn(opts)
     vim.fn.chansend(job_id, vim.json.encode(command_table) .. '\n')
   end
 
+  ---Send a command tagged with a fresh id; `callback` receives pi's reply
+  ---(success or failure) on the main thread.
+  ---@param command_table table
+  ---@param callback fun(response: table)|nil
+  ---@return string id
+  local function request(command_table, callback)
+    local id = next_request_id()
+    if callback then
+      pending[id] = callback
+    end
+    command_table.id = id
+    send(command_table)
+    return id
+  end
+
   ---@type ConductorInstanceHandle
   local handle = {
     prompt = function(text, prompt_opts)
@@ -173,10 +209,9 @@ function M.spawn(opts)
       vim.fn.jobstop(job_id)
     end,
     get_state = function(callback)
-      local id = next_request_id()
-      pending[id] = callback
-      send { id = id, type = 'get_state' }
+      request({ type = 'get_state' }, callback)
     end,
+    request = request,
   }
 
   return handle

@@ -28,6 +28,13 @@ local defaults = {
     ---Session-list panel width in columns.
     width = 60,
   },
+  chat = {
+    ---Open `/` command completion automatically in the input bar. Uses
+    ---blink.cmp when installed (source registered at runtime for the
+    ---`conductor_input` filetype), otherwise Neovim's built-in popup.
+    ---`<C-x><C-o>` always works.
+    slash_completion = true,
+  },
   terminal = {
     ---How to open the resumed session:
     ---  'snacks'   - snacks.nvim terminal in a new nvim tab

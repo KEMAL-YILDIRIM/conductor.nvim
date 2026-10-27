@@ -186,6 +186,15 @@ M.spawn = function(opts)
   return require('conductor.adapters.pi_rpc').spawn(opts)
 end
 
+---Built-in slash commands / shell shortcuts for managed instances.
+M.dispatch_input = function(instance, text)
+  return require('conductor.adapters.pi_commands').dispatch(instance, text)
+end
+
+M.list_commands = function(instance, callback)
+  return require('conductor.adapters.pi_commands').list_commands(instance, callback)
+end
+
 ---@param session ConductorSession
 ---@return string[]
 function M.resume_cmd(session)
