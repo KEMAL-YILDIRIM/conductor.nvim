@@ -9,6 +9,7 @@ Currently supports the [pi coding agent](https://github.com/earendil-works/pi-mo
 - **Phase 1 (done)**: session discovery, telescope picker with parsed conversation-log preview, resume in terminal
 - **Phase 2 (done)**: RPC supervisor — spawn/manage `pi --mode rpc` processes, live sidebar with per-session status (streaming / needs input / idle / error), streaming chat buffer, agent dialog forwarding
 - **Phase 3 (done)**: richer chat view — collapsible tool calls with captured output, tool navigation, persistent multi-line input bar
+- **Slash commands (done)**: pi built-in commands (`/model`, `/compact`, `/fork`, …) and `!cmd` shell shortcuts in managed sessions, with `/` completion
 - **Phase 4 (done)**: backend-neutral picker core + fzf-lua backend, external-session visibility via the bundled `conductor-presence` pi extension
 - **Later**: image support, richer external-session interaction (steering via socket)
 
@@ -149,12 +150,41 @@ Input bar:
 
 | Key | Action |
 |---|---|
-| `<CR>` | Send prompt (normal or insert mode) |
+| `<CR>` | Send prompt / run command (normal or insert mode); accepts the item when a completion menu is open |
 | `<S-CR>` | Insert newline |
-| `<C-c>` | Stop (abort) the running agent |
+| `<C-c>` | Stop (abort) the running agent; first press only closes an open completion menu |
 | `<C-k>` | Focus the log window |
+| `<C-x><C-o>` | Complete `/` commands manually |
 | `g?` | Toggle the keybinding cheatsheet |
 | `q` | Close the chat view (normal mode) |
+
+#### Slash commands and shell shortcuts
+
+pi only runs its built-in commands in its terminal interface, so conductor checks the input bar text before sending it:
+
+| Input | What happens |
+|---|---|
+| `/model [provider/model]` | Switch model (no argument: pick from a list) |
+| `/thinking [level]` | Set the thinking level (no argument: pick from a list) |
+| `/compact [instructions]` | Compact the context; reports tokens before → after |
+| `/new` | Start a new session (clears the chat log) |
+| `/name [name]` | Rename the session, or show the current name |
+| `/session` | Messages, tokens, cost and context usage |
+| `/fork` | Pick an earlier message; forks the session and puts that message back in the input bar |
+| `/clone` | Duplicate the session at its current position |
+| `/export [path]` | Export the session as HTML |
+| `/copy` | Copy the last assistant reply to the `+` register |
+| `/help` | List every command available in this session |
+| `!cmd` | Run a shell command; output shown as a tool entry and sent to the model |
+| `!!cmd` | Same, but the output is kept from the model |
+| `/skill:name`, `/template`, extension commands | Sent to pi unchanged; pi expands / runs them |
+| `//text` | Sends a literal `/text` to the model |
+
+- Unknown `/words` are refused with a warning and the text stays in the input bar.
+- Terminal-only commands (`/settings`, `/login`, `/tree`, `/resume`, `/reload`, `/quit`, …) are refused instead of being sent to the model.
+- `/model`, `/compact`, `/new`, `/fork` and `/clone` are refused while the agent is replying — stop it first with `<C-c>`.
+
+**Completion.** Typing `/` at the start of the input bar opens a command menu (built-ins plus pi's skills, templates and extension commands). The input bar has its own filetype, `conductor_input` (markdown highlighting is kept). If [blink.cmp](https://github.com/saghen/blink.cmp) is installed, conductor registers a `conductor` source at runtime and limits that filetype to it, so no blink config change is needed and path/buffer suggestions don't appear on `/`. Without blink, Neovim's built-in popup is used. Set `chat.slash_completion = false` to disable the automatic menu.
 
 The previewer shows the **parsed conversation log** — user prompts and assistant replies only — not the raw JSONL, so you can quickly assess which session you're looking at.
 
@@ -179,6 +209,9 @@ require('conductor').setup {
   },
   browser = {
     width = 44, -- session-list panel width
+  },
+  chat = {
+    slash_completion = true, -- open `/` command completion automatically in the input bar
   },
   terminal = {
     backend = 'snacks', -- 'snacks', 'split', or 'external'

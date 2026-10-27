@@ -14,6 +14,7 @@ conductor-browser-keys	conductor.txt	/*conductor-browser-keys*
 conductor-browser.width	conductor.txt	/*conductor-browser.width*
 conductor-chat	conductor.txt	/*conductor-chat*
 conductor-chat-keys	conductor.txt	/*conductor-chat-keys*
+conductor-chat.slash_completion	conductor.txt	/*conductor-chat.slash_completion*
 conductor-commands	conductor.txt	/*conductor-commands*
 conductor-configuration	conductor.txt	/*conductor-configuration*
 conductor-default_adapter	conductor.txt	/*conductor-default_adapter*
@@ -34,6 +35,7 @@ conductor-sidebar	conductor.txt	/*conductor-sidebar*
 conductor-sidebar-keys	conductor.txt	/*conductor-sidebar-keys*
 conductor-sidebar-status	conductor.txt	/*conductor-sidebar-status*
 conductor-sidebar.width	conductor.txt	/*conductor-sidebar.width*
+conductor-slash-commands	conductor.txt	/*conductor-slash-commands*
 conductor-terminal.backend	conductor.txt	/*conductor-terminal.backend*
 conductor-terminal.open	conductor.txt	/*conductor-terminal.open*
 conductor-terminal.snacks_win	conductor.txt	/*conductor-terminal.snacks_win*

@@ -183,14 +183,54 @@ Log window mappings:                                      *conductor-chat-keys*
 
 Input bar mappings:                                      *conductor-input-keys*
 
-    <CR>        Send the prompt (normal or insert mode)
+    <CR>        Send the prompt / run the command (normal or insert mode).
+                With a completion menu open, accepts the selected item.
     <S-CR>      Insert a newline (insert mode)
+    <C-c>       Abort the running agent (first press only closes an open
+                completion menu)
     <C-k>       Focus the log window
+    <C-x><C-o>  Complete `/` commands manually
     q           Close the chat view (normal mode)
 
 Tool calls render collapsed as `▶ bash `echo hi``; expanding shows the
 captured output in a fenced code block. Running tools show `…`, failed
 tools `✗`.
+
+Slash commands and shell shortcuts:              *conductor-slash-commands*
+
+pi runs its built-in commands only in its terminal interface. Conductor
+checks the input bar text before sending it and runs these itself over
+pi's RPC protocol; the result appears in the chat as a system line.
+
+    /model [provider/model]  Switch model (no argument: pick from a list)
+    /thinking [level]        Set the thinking level (no argument: pick)
+    /compact [instructions]  Compact the context
+    /new                     Start a new session (clears the chat log)
+    /name [name]             Rename the session, or show its name
+    /session                 Messages, tokens, cost and context usage
+    /fork                    Fork from an earlier message; the message is
+                             put back in the input bar for editing
+    /clone                   Duplicate the session at its current position
+    /export [path]           Export the session as HTML
+    /copy                    Copy the last reply to the `+` register
+    /help                    List every command available in the session
+    !cmd                     Run a shell command (output sent to the model)
+    !!cmd                    Run a shell command (output kept from the model)
+    //text                   Send a literal `/text` to the model
+
+Skills (`/skill:name`), prompt templates and extension commands are sent
+to pi unchanged. Unknown `/words` are refused with a warning and the text
+stays in the input bar. Terminal-only commands (`/settings`, `/login`,
+`/tree`, `/resume`, `/reload`, `/quit`, ...) are refused instead of being
+sent to the model. `/model`, `/compact`, `/new`, `/fork` and `/clone` are
+refused while the agent is replying.
+
+Completion: typing `/` at the start of the input bar opens a command menu
+(built-ins plus pi's discovered commands). The input bar uses its own
+filetype, `conductor_input`, with markdown syntax highlighting. When
+blink.cmp is installed, conductor registers a `conductor` source at
+runtime and limits that filetype to it (no blink config needed); otherwise
+Neovim's built-in popup is used. See |conductor-chat.slash_completion|.
 
 ==============================================================================
 8. EXTERNAL SESSIONS                                       *conductor-external*
@@ -228,6 +268,9 @@ Call `require('conductor').setup(opts)`. Defaults: >lua
       },
       browser = {
         width = 44,            -- session-list panel width in columns
+      },
+      chat = {
+        slash_completion = true, -- auto-open `/` completion in the input bar
       },
       terminal = {
         backend = 'snacks',    -- 'snacks', 'split', or 'external'
@@ -270,6 +313,12 @@ sidebar.width                                        *conductor-sidebar.width*
 browser.width                                        *conductor-browser.width*
     Type: `number`, default: `44`
     Session-list panel width in columns.
+
+chat.slash_completion                      *conductor-chat.slash_completion*
+    Type: `boolean`, default: `true`
+    Open `/` command completion automatically in the chat input bar. Uses
+    blink.cmp when installed, otherwise Neovim's built-in popup. `<C-x><C-o>`
+    always works. See |conductor-slash-commands|.
 
 terminal.backend                                  *conductor-terminal.backend*
     Type: `string`, default: `'snacks'`
@@ -375,7 +424,7 @@ keymaps                                                  *conductor-keymaps*
           close = 'q',         -- close the chat view
         },
         input = {
-          send = '<CR>',       -- send the prompt
+          send = '<CR>',       -- send the prompt / run a command
           newline = '<S-CR>',  -- insert a literal newline (insert mode)
           focus_log = '<C-k>', -- focus the log window
           abort = '<C-c>',     -- abort the running agent

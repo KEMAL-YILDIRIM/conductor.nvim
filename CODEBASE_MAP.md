@@ -1,5 +1,5 @@
 # Codebase Map
-_Last updated: 2026-02-13T00:00:00Z_
+_Last updated: 2026-10-27_
 
 ## Architecture Overview
 
@@ -23,7 +23,16 @@ Entry point: `M.setup(opts)` in `lua/conductor/init.lua`, which registers the
   registry. Phases: (1) discovery/parse/resume, (2) `spawn()` managed headless
   instances emitting normalized events.
 - `pi.lua`, `pi_fs.lua`, `pi_rpc.lua` — the pi implementation: filesystem
-  discovery and the `pi --mode rpc` supervisor transport.
+  discovery and the `pi --mode rpc` supervisor transport. `pi_rpc` exposes a
+  generic `handle.request(command, callback)` (id-tagged, reply delivered on
+  the main thread) and reports automatic compaction as notifications.
+- `pi_commands.lua` — pi built-in slash commands for managed sessions
+  (`/model`, `/thinking`, `/compact`, `/new`, `/name`, `/session`, `/fork`,
+  `/clone`, `/export`, `/copy`, `/help`) mapped to RPC requests, plus
+  `!cmd`/`!!cmd` shell shortcuts. `dispatch(instance, text)` returns
+  `'handled' | 'rejected' | 'passthrough'`; `list_commands` caches pi's
+  `get_commands` per instance (fetched at spawn). Wired as the optional adapter
+  fields `dispatch_input` / `list_commands`.
 
 ### Session Discovery & Parsing
 - `log_parser.lua` — parses pi session JSONL files into clean conversation logs
@@ -52,11 +61,22 @@ the browser and jumps/scrolls to the line.
 
 ### UI: Chat & Sidebar
 - `chatlog.lua` — per-instance markdown-rendered chat view with collapsible
-  tool-call entries and a persistent multi-line input bar.
+  tool-call entries and a persistent multi-line input bar (filetype
+  `conductor_input`, `syntax=markdown`). Refused input stays in the bar;
+  `set_input()` refills it (used by `/fork`).
+- `completion.lua` — `/` command completion for the input bar: registers the
+  `conductor.blink` source with blink.cmp at runtime (and restricts the
+  `conductor_input` filetype to it unless the user configured that filetype),
+  else falls back to `omnifunc` + a `TextChangedI` auto-trigger. Also
+  `accept_if_open`/`close_if_open` so `<CR>`/`<C-c>`/`<C-k>` act on an open
+  menu first.
+- `blink.lua` — the blink.cmp source (enabled only in `conductor_input`).
 - `sidebar.lua` — live sessions sidebar, one line per managed instance with a
   status icon. Push-updated via the `User ConductorUpdate` autocmd (no polling).
 - `supervisor.lua` — owns managed instances, tracks status, broadcasts changes
-  via `User ConductorUpdate`.
+  via `User ConductorUpdate`. `submit()` routes input through the adapter's
+  `dispatch_input` before `prompt()`; `append`/`note`/`reset_log` helpers let
+  commands write into the chat log.
 - `ui_dialog.lua` — presents blocking agent `ui_request` dialogs via
   `vim.ui.select`/`vim.ui.input` and sends the response back.
 - `help.lua` — floating keybinding cheatsheet (`g?`), rendered from buffer-local
@@ -69,7 +89,7 @@ the browser and jumps/scrolls to the line.
 
 ### Config
 - `config.lua` — defaults + `setup()`. Notable: `browser.width` (60 cols),
-  terminal backend options.
+  terminal backend options, `chat.slash_completion`.
 
 ## Data Flow
 
@@ -80,6 +100,9 @@ the browser and jumps/scrolls to the line.
    markdown previews via `picker.highlight_markdown_preview`.
 4. Managed run: `supervisor` spawns via adapter RPC → normalized events →
    `chatlog`/`sidebar`; `User ConductorUpdate` drives UI refresh.
+5. Chat input: `chatlog` `<CR>` → `supervisor.submit` → adapter
+   `dispatch_input` (built-in command → RPC request → system note; `!cmd` →
+   `bash` request → tool entry) or passthrough → `handle.prompt`.
 
 ## Key Patterns
 
@@ -98,6 +121,14 @@ the browser and jumps/scrolls to the line.
   `/NNN ` token so oil.nvim-style edits map back to sessions.
 
 ## Recent Changes
+- 2026-10-27 **Slash commands in managed sessions**: pi's built-in commands
+  only work in its TUI, so `pi_commands.lua` intercepts them (and `!cmd`)
+  and issues the matching RPC requests. pi's discovered commands are checked
+  *before* the terminal-only refusal list (an extension registers `/llama`).
+  Locally-run shell entries carry `local_command = true` so the agent's own
+  `bash` `tool_end` events don't match them. `/` completion via a runtime
+  blink.cmp source or native `omnifunc`; input bar filetype is now
+  `conductor_input`.
 - 2026-02-13 Fixed browser fold leak: `M.foldexpr`/`M.foldtext` are window-local
   and inherited by splits spawned off the browser, so collapsed folds in other
   buffers (e.g. a C# file) rendered conductor's "(N sessions)" foldtext. Both
