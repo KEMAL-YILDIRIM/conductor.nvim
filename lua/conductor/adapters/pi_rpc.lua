@@ -107,6 +107,30 @@ local function translate(decoded, emit, pending)
   end
 end
 
+---On Windows, a `.cmd`/`.bat` shim (npm/managed installs ship `pi.cmd`) can't
+---be launched directly when any argument contains a space: cmd.exe strips the
+---wrong quotes and splits the shim's own path ("'C:\Users\First' is not
+---recognized"). Run it via `cmd.exe /d /s /c "<all args quoted>"` instead, so
+---cmd strips only the outer quote pair. Other executables pass through as-is.
+---Limitation: arguments containing `"` or `%` are still not safe through cmd.
+---@param argv string[]
+---@return string[]
+local function windows_safe_argv(argv)
+  if vim.fn.has 'win32' ~= 1 then
+    return argv
+  end
+  local executable = vim.fn.exepath(argv[1])
+  local lowered = executable:lower()
+  if not (lowered:match '%.cmd$' or lowered:match '%.bat$') then
+    return argv
+  end
+  local quoted = { '"' .. executable .. '"' }
+  for index = 2, #argv do
+    quoted[#quoted + 1] = '"' .. argv[index] .. '"'
+  end
+  return { 'cmd.exe', '/d', '/s', '/c', '"' .. table.concat(quoted, ' ') .. '"' }
+end
+
 ---Spawn a managed pi RPC instance.
 ---@param opts { cwd?: string, session_path?: string, name?: string, ephemeral?: boolean, on_event: fun(event: table), on_exit: fun(code: integer) }
 ---@return ConductorInstanceHandle|nil handle, string|nil error
@@ -127,6 +151,9 @@ function M.spawn(opts)
   ---@type table<string, fun(response: table)>
   local pending = {}
   local stdout_buffer = ''
+  ---Last few stderr lines, surfaced in the chat when the process dies.
+  local stderr_tail = {}
+  local killed = false
 
   local function emit(event)
     vim.schedule(function()
@@ -134,9 +161,20 @@ function M.spawn(opts)
     end)
   end
 
-  local job_id = vim.fn.jobstart(argv, {
+  local job_id = vim.fn.jobstart(windows_safe_argv(argv), {
     cwd = opts.cwd,
     stdout_buffered = false,
+    on_stderr = function(_, data)
+      for _, line in ipairs(data) do
+        line = line:gsub('\r', '')
+        if line ~= '' then
+          stderr_tail[#stderr_tail + 1] = line
+          if #stderr_tail > 5 then
+            table.remove(stderr_tail, 1)
+          end
+        end
+      end
+    end,
     on_stdout = function(_, data)
       -- jobstart splits on newlines already, but partial lines arrive as
       -- unterminated fragments: data[1] continues the previous fragment.
@@ -159,6 +197,12 @@ function M.spawn(opts)
       end
     end,
     on_exit = function(_, code)
+      -- An unexpected non-zero exit would otherwise be silent: report it (with
+      -- pi's stderr) into the chat before marking the instance exited.
+      if code ~= 0 and not killed then
+        local detail = #stderr_tail > 0 and (': ' .. table.concat(stderr_tail, ' | ')) or ''
+        emit { type = 'error', message = ('pi exited (code %d)%s'):format(code, detail) }
+      end
       vim.schedule(function()
         opts.on_exit(code)
       end)
@@ -206,6 +250,7 @@ function M.spawn(opts)
       send { type = 'abort' }
     end,
     kill = function()
+      killed = true
       vim.fn.jobstop(job_id)
     end,
     get_state = function(callback)
