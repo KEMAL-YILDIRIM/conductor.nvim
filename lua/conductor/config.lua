@@ -102,6 +102,8 @@ local defaults = {
       new = 'n', ---Create a new session.
       stop = 's', ---Stop the running agent.
       kill = 'x', ---Kill / remove the instance.
+      next_session = 'j', ---Jump to the next session row.
+      prev_session = 'k', ---Jump to the previous session row.
       close = 'q', ---Close the sidebar.
     },
     ---Chat log window.

@@ -81,6 +81,7 @@ local function sync_state(instance, after)
       instance.name = state.sessionName
     end
     supervisor().broadcast()
+    supervisor().refresh_info(instance)
     if after then
       after(state)
     end
@@ -119,6 +120,7 @@ local function run_model(instance, argument)
     local function apply(model)
       request(instance, { type = 'set_model', provider = model.provider, modelId = model.id }, function()
         note(instance, 'model: ' .. model_label(model))
+        supervisor().refresh_info(instance)
       end)
     end
     if argument == '' then
@@ -156,6 +158,7 @@ local function run_thinking(instance, argument)
     local function apply(level)
       request(instance, { type = 'set_thinking_level', level = level }, function()
         note(instance, 'thinking level: ' .. level)
+        supervisor().refresh_info(instance)
       end)
     end
     if argument == '' then
@@ -182,6 +185,7 @@ local function run_compact(instance, argument)
   note(instance, 'compacting context…')
   request(instance, command, function(result)
     note(instance, ('context compacted: %s → %s tokens'):format(show(result.tokensBefore), show(result.estimatedTokensAfter)))
+    supervisor().refresh_info(instance)
   end)
 end
 
@@ -556,6 +560,48 @@ function M.dispatch(instance, text)
   end
   warn(('unknown command /%s — /help lists commands; start with // to send it as text'):format(name))
   return 'rejected'
+end
+
+---Fetch the details shown for the selected session in the live sessions
+---sidebar. Silent (background refresh): failures leave the fields untouched
+---instead of writing errors into the chat. Calls back once per reply with a
+---partial update; `false` marks a field pi reported as absent.
+---@param instance ConductorInstance
+---@param callback fun(partial: ConductorInstanceInfo)
+function M.fetch_info(instance, callback)
+  local handle = instance.handle
+  if not handle or not handle.request then
+    return
+  end
+  handle.request({ type = 'get_state' }, function(response)
+    if response.success == false or type(response.data) ~= 'table' then
+      return
+    end
+    local state = response.data
+    callback {
+      model = type(state.model) == 'table' and model_label(state.model) or false,
+      thinking = type(state.thinkingLevel) == 'string' and state.thinkingLevel or false,
+    }
+  end)
+  handle.request({ type = 'get_session_stats' }, function(response)
+    if response.success == false or type(response.data) ~= 'table' then
+      return
+    end
+    local usage = response.data.contextUsage
+    if type(usage) ~= 'table' then
+      callback { context = false }
+      return
+    end
+    -- `tokens` / `percent` are null right after a compaction (unknown until
+    -- the next turn); tonumber(vim.NIL) yields nil.
+    callback {
+      context = {
+        tokens = tonumber(usage.tokens),
+        window = tonumber(usage.contextWindow),
+        percent = tonumber(usage.percent),
+      },
+    }
+  end)
 end
 
 return M

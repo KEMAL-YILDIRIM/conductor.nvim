@@ -195,6 +195,11 @@ M.list_commands = function(instance, callback)
   return require('conductor.adapters.pi_commands').list_commands(instance, callback)
 end
 
+---Model / thinking level / context usage for the live sessions sidebar.
+M.fetch_info = function(instance, callback)
+  return require('conductor.adapters.pi_commands').fetch_info(instance, callback)
+end
+
 ---@param session ConductorSession
 ---@return string[]
 function M.resume_cmd(session)

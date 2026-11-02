@@ -23,6 +23,14 @@ local M = {}
 ---@field partial string in-flight assistant text
 ---@field chat_bufnr integer|nil
 ---@field exit_code integer|nil
+---@field info ConductorInstanceInfo details shown when selected in the sidebar
+
+---Sidebar details, filled asynchronously by the adapter's `fetch_info`.
+---`nil` = not fetched yet, `false` = the agent reported it as absent.
+---@class ConductorInstanceInfo
+---@field model string|false|nil e.g. 'anthropic/claude-opus-4-5'
+---@field thinking string|false|nil thinking level, e.g. 'medium'
+---@field context { tokens: number|nil, window: number|nil, percent: number|nil }|false|nil context window usage
 
 ---@type table<integer, ConductorInstance>
 M.instances = {}
@@ -61,6 +69,7 @@ local function on_event(instance, event)
       set_status(instance, 'needs_input')
     end
     chatlog.refresh(instance)
+    M.refresh_info(instance)
   elseif event.type == 'text_start' then
     if instance.partial ~= '' then
       instance.log[#instance.log + 1] = { role = 'assistant', text = instance.partial }
@@ -159,6 +168,7 @@ function M.spawn(opts)
     partial = '',
     chat_bufnr = nil,
     exit_code = nil,
+    info = {},
   }
 
   local handle, spawn_error = start_process(instance, adapter, opts)
@@ -175,6 +185,7 @@ function M.spawn(opts)
   if adapter.list_commands then
     adapter.list_commands(instance, function() end)
   end
+  M.refresh_info(instance)
 
   -- When attaching to an existing session, preload its on-disk history so the
   -- chat view shows the prior conversation instead of starting blank. Only the
@@ -223,7 +234,29 @@ function M.restart(instance)
     adapter.list_commands(instance, function() end)
   end
   require('conductor.chatlog').refresh(instance)
+  M.refresh_info(instance)
   return true
+end
+
+---Re-fetch the sidebar details (model, thinking level, context usage) through
+---the adapter's optional `fetch_info`. Each partial reply is merged into
+---`instance.info` and broadcast so the sidebar redraws.
+---@param instance ConductorInstance
+function M.refresh_info(instance)
+  if not instance.handle then
+    return
+  end
+  local adapter = require('conductor.adapters.interface').get(instance.adapter)
+  if not adapter.fetch_info then
+    return
+  end
+  adapter.fetch_info(instance, function(partial)
+    instance.info = instance.info or {}
+    for key, value in pairs(partial) do
+      instance.info[key] = value
+    end
+    broadcast()
+  end)
 end
 
 ---Find a managed instance bound to `session_path`, if any.

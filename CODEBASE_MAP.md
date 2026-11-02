@@ -73,10 +73,17 @@ the browser and jumps/scrolls to the line.
   `accept_if_open`/`close_if_open` so `<CR>`/`<C-c>`/`<C-k>` act on an open
   menu first.
 - `blink.lua` — the blink.cmp source (enabled only in `conductor_input`).
-- `sidebar.lua` — live sessions sidebar, one line per managed instance with a
-  status icon. Push-updated via the `User ConductorUpdate` autocmd (no polling).
+- `sidebar.lua` — live sessions sidebar, one row per session with a
+  color-coded status light (`ConductorLed*` groups). The selected managed
+  session expands into a detail tree (model, thinking level, context usage)
+  filled from `instance.info`; the cursor is pinned to its session across
+  re-renders and `j`/`k` jump between session rows. Push-updated via the
+  `User ConductorUpdate` autocmd (no polling).
 - `supervisor.lua` — owns managed instances, tracks status, broadcasts changes
-  via `User ConductorUpdate`. `submit()` routes input through the adapter's
+  via `User ConductorUpdate`. `refresh_info()` fills `instance.info` through
+  the adapter's optional `fetch_info` (after spawn/restart, every finished
+  turn, and model/thinking/compact/session-switch commands). `submit()` routes
+  input through the adapter's
   `dispatch_input` before `prompt()`; `append`/`note`/`reset_log` helpers let
   commands write into the chat log.
 - `ui_dialog.lua` — presents blocking agent `ui_request` dialogs via
