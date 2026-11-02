@@ -192,12 +192,22 @@ end
 ---Attach as a managed RPC instance (opened in its own tab).
 ---@param session ConductorSession
 function M.action_attach(session)
-  local instance, spawn_error = require('conductor.supervisor').spawn {
-    adapter = session.adapter,
-    cwd = session.cwd,
-    session_path = session.path,
-    name = session.name,
-  }
+  local supervisor = require 'conductor.supervisor'
+  -- Reuse an instance already bound to this session file (reviving it if it
+  -- exited) instead of spawning a duplicate.
+  local instance, spawn_error = supervisor.find_by_session(session.path), nil
+  if instance then
+    if not supervisor.restart(instance) then
+      return
+    end
+  else
+    instance, spawn_error = supervisor.spawn {
+      adapter = session.adapter,
+      cwd = session.cwd,
+      session_path = session.path,
+      name = session.name,
+    }
+  end
   if instance then
     -- Open the managed view on a dedicated tab so it never disturbs the
     -- current (e.g. browser) layout. The sidebar + chat windows then fill

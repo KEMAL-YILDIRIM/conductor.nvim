@@ -156,11 +156,12 @@ local function setup_keymaps()
     local external = state.line_to_external[line] or state.line_to_external[line - 1]
     if external and external.session_file then
       local supervisor = require 'conductor.supervisor'
-      for _, existing in ipairs(supervisor.list()) do
-        if existing.session_path == external.session_file then
-          require('conductor.chatlog').open(existing)
-          return
-        end
+      local existing = supervisor.find_by_session(external.session_file)
+      if existing then
+        -- Revive an exited instance on its session file before showing it.
+        supervisor.restart(existing)
+        require('conductor.chatlog').open(existing)
+        return
       end
       local attached, spawn_error = supervisor.spawn {
         adapter = 'pi',

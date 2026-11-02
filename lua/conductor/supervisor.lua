@@ -102,6 +102,36 @@ local function on_event(instance, event)
   end
 end
 
+---Start the agent process for `instance` and wire its events / exit into it.
+---Used both for a fresh spawn and for restarting an exited instance.
+---@param instance ConductorInstance
+---@param adapter table
+---@param opts { session_path?: string, name?: string, ephemeral?: boolean }
+---@return ConductorInstanceHandle|nil handle, string|nil error
+local function start_process(instance, adapter, opts)
+  local handle, spawn_error
+  handle, spawn_error = adapter.spawn {
+    cwd = instance.cwd,
+    session_path = opts.session_path,
+    name = opts.name,
+    ephemeral = opts.ephemeral,
+    on_event = function(event)
+      on_event(instance, event)
+    end,
+    on_exit = function(code)
+      -- A late exit from a previous process must not clobber a restarted one.
+      if instance.handle ~= handle then
+        return
+      end
+      instance.exit_code = code
+      instance.handle = nil
+      instance.pending_ui = nil
+      set_status(instance, 'exited')
+    end,
+  }
+  return handle, spawn_error
+end
+
 ---Spawn a new managed instance.
 ---@param opts { adapter?: string, cwd?: string, session_path?: string, name?: string, ephemeral?: boolean }
 ---@return ConductorInstance|nil instance, string|nil error
@@ -131,20 +161,7 @@ function M.spawn(opts)
     exit_code = nil,
   }
 
-  local handle, spawn_error = adapter.spawn {
-    cwd = instance.cwd,
-    session_path = opts.session_path,
-    name = opts.name,
-    ephemeral = opts.ephemeral,
-    on_event = function(event)
-      on_event(instance, event)
-    end,
-    on_exit = function(code)
-      instance.exit_code = code
-      instance.handle = nil
-      set_status(instance, 'exited')
-    end,
-  }
+  local handle, spawn_error = start_process(instance, adapter, opts)
   if not handle then
     return nil, spawn_error
   end
@@ -168,6 +185,60 @@ function M.spawn(opts)
   end
 
   return instance
+end
+
+---Restart the agent process of an exited instance, resuming its session file.
+---Keeps the instance id, chat log and chat buffer. No-op if it is still alive.
+---@param instance ConductorInstance
+---@return boolean ok
+function M.restart(instance)
+  if instance.handle then
+    return true
+  end
+  if not instance.session_path then
+    vim.notify('conductor: instance has exited and has no session file to resume', vim.log.levels.ERROR)
+    return false
+  end
+  local adapter = require('conductor.adapters.interface').get(instance.adapter)
+  if not adapter.spawn then
+    vim.notify(('conductor: adapter %q does not support managed instances'):format(instance.adapter), vim.log.levels.ERROR)
+    return false
+  end
+
+  local handle, spawn_error = start_process(instance, adapter, { session_path = instance.session_path, name = instance.name })
+  if not handle then
+    vim.notify('conductor: restart failed: ' .. (spawn_error or 'unknown error'), vim.log.levels.ERROR)
+    return false
+  end
+
+  instance.handle = handle
+  instance.exit_code = nil
+  instance.pending_ui = nil
+  if instance.partial ~= '' then
+    instance.log[#instance.log + 1] = { role = 'assistant', text = instance.partial }
+    instance.partial = ''
+  end
+  set_status(instance, 'idle')
+  if adapter.list_commands then
+    adapter.list_commands(instance, function() end)
+  end
+  require('conductor.chatlog').refresh(instance)
+  return true
+end
+
+---Find a managed instance bound to `session_path`, if any.
+---@param session_path string|nil
+---@return ConductorInstance|nil
+function M.find_by_session(session_path)
+  if not session_path then
+    return nil
+  end
+  for _, instance in pairs(M.instances) do
+    if instance.session_path == session_path then
+      return instance
+    end
+  end
+  return nil
 end
 
 ---Populate `instance.log` from the session file on disk (used when attaching to
@@ -234,8 +305,8 @@ end
 ---@param text string trimmed, non-empty input
 ---@return boolean consumed false when the input was refused and should stay editable
 function M.submit(instance, text)
-  if not instance.handle then
-    vim.notify('conductor: instance has exited', vim.log.levels.ERROR)
+  -- An exited instance is transparently restarted on its session file.
+  if not instance.handle and not M.restart(instance) then
     return false
   end
   local adapter = require('conductor.adapters.interface').get(instance.adapter)
