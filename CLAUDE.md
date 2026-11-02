@@ -34,6 +34,40 @@ patterns that apply to all projects.
 ## Session Learnings
 <!-- Learnings captured by /learn command -->
 
+### 2026-09-17
+- **Displayed "session time" was the file mtime, which a copy/move resets.**
+  Copying session files between project dirs (a *copy*, not a move — originals
+  stayed) stamped every copy at copy-time, scrambling the browser's order even
+  though the header `cwd` was correctly rewritten. The durable fix is to read
+  timestamps from *inside* the log: `type:"session"` header `timestamp` =
+  created; the newest entry `timestamp` = last-activity. Both are ISO-8601 UTC,
+  so a lexicographic string max = chronological max (no parsing needed to track
+  the latest). `scan_meta` matches `"timestamp":"..."` per line (cheap, no
+  decode); `parse` tracks it over decoded entries — keep the two in sync so the
+  listing and content pane agree.
+- **`iso_to_epoch` for sorting must use only stdlib.** `pi.list_sessions` runs
+  in a threadpool worker (no `vim.fn`), so ISO→epoch conversion uses
+  `os.time{...}` + a local-offset correction
+  (`os.difftime(os.time(os.date'!*t'), os.time(os.date'*t'))`). Sort by a
+  precomputed `sort_time` (= `iso_to_epoch(last_activity)` with mtime fallback),
+  not by mixing ISO strings and epoch integers.
+- **`stylua lua/` reformats the whole tree because the repo predates its own
+  `.stylua.toml`.** The config is `column_width = 160`, but committed code was
+  formatted narrower, so a blanket run collapses many unrelated multi-line calls
+  and re-indents the over-indented `do` block in `log_parser.parse` pass 2 —
+  huge diff churn unrelated to the change. For a focused change: hand-format
+  additions to match (2-space, ≤160 col) and do **not** run `stylua lua/`.
+  Reformatting the whole tree is a separate housekeeping task.
+- **Headless verification must bypass the user's loaded plugin.** `nvim
+  --headless -c luafile` still sources the user config, which `require`s the
+  *installed* conductor into `package.loaded` at startup; a later `require`
+  returns that cached copy and ignores a `package.path` prepend, so edits under
+  test look like they had no effect. Use `nvim --headless -u NONE`, prepend
+  `./lua/?.lua;./lua/?/init.lua`, and clear `package.loaded['conductor.*']`
+  before requiring. Also: `nvim.exe` is a Windows binary — pass it Windows-style
+  paths for `luafile` (a Git-Bash `/tmp/...` path won't resolve; write the
+  scratch script inside the worktree instead).
+
 ### 2026-02-13
 - **pi sessions are a `parentId` DAG, not a linear log.** Rewind/edit/retry
   appends a *sibling* entry at a shared `parentId`, so a file can hold several

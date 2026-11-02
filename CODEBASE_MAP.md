@@ -36,7 +36,9 @@ Entry point: `M.setup(opts)` in `lua/conductor/init.lua`, which registers the
 
 ### Session Discovery & Parsing
 - `log_parser.lua` — parses pi session JSONL files into clean conversation logs
-  + metadata (format per pi-coding-agent session-format docs).
+  + metadata (format per pi-coding-agent session-format docs). Metadata carries
+  two in-file timestamps (`created` = session header, `last_activity` = newest
+  entry) that survive a copy/move, unlike the file mtime.
 - `threadwork.lua` — runs pure-Lua scans/parses on libuv's threadpool
   (`vim.uv.new_work`) so multi-MB JSONL reads don't block the UI. Worker runs in
   a fresh Lua state per call (no upvalues/globals).
@@ -119,6 +121,11 @@ the browser and jumps/scrolls to the line.
   avoids "Keyboard interrupt" during buffer teardown on picker cancel.
 - **Editable-list mapping via concealed id token**: list lines carry a hidden
   `/NNN ` token so oil.nvim-style edits map back to sessions.
+- **Copy/move-proof timestamps from session data**: recency display and sort
+  read `created`/`last_activity` from *inside* the session log (ISO-8601 UTC
+  strings, comparable lexicographically), falling back to the file mtime only
+  when a session has no parseable timestamp — so copying/moving a session file
+  (which resets mtime) no longer scrambles the displayed time or list order.
 
 ## Recent Changes
 - 2026-10-27 **Slash commands in managed sessions**: pi's built-in commands
@@ -129,6 +136,16 @@ the browser and jumps/scrolls to the line.
   `bash` `tool_end` events don't match them. `/` completion via a runtime
   blink.cmp source or native `omnifunc`; input bar filetype is now
   `conductor_input`.
+- 2026-09-17 **Copy/move-proof session times**: the browser now reads
+  `created` (session header timestamp) and `last_activity` (newest entry
+  timestamp) from inside the session log instead of the file mtime, which a
+  copy/move resets. `log_parser.scan_meta` (cheap listing path) tracks the max
+  `"timestamp"` via a string match; `log_parser.parse` (content path) tracks it
+  over decoded entries — both agree. `pi.list_sessions` propagates both onto
+  `ConductorSession` and sorts by a `sort_time` = `iso_to_epoch(last_activity)`
+  (stdlib `os.time`/`os.date`, threadpool-safe) with mtime fallback. Browser
+  content header shows `created X · updated Y · N msg`; both labels fall back to
+  `relative_time(mtime)` for files lacking the fields.
 - 2026-02-13 Fixed browser fold leak: `M.foldexpr`/`M.foldtext` are window-local
   and inherited by splits spawned off the browser, so collapsed folds in other
   buffers (e.g. a C# file) rendered conductor's "(N sessions)" foldtext. Both
