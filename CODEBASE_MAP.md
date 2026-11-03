@@ -65,7 +65,13 @@ the browser and jumps/scrolls to the line.
 - `chatlog.lua` — per-instance markdown-rendered chat view with collapsible
   tool-call entries and a persistent multi-line input bar (filetype
   `conductor_input`, `syntax=markdown`). Refused input stays in the bar;
-  `set_input()` refills it (used by `/fork`).
+  `set_input()` refills it (used by `/fork`). The input window's
+  `statusline` comes from `statusline.lua`, refreshed on `ConductorUpdate`.
+- `statusline.lua` — session details (model, thinking level, context usage,
+  status) for the input window, read from `b:conductor_instance_id` →
+  `instance.info`. `render()` backs a plain `%{%...%}` statusline;
+  `lua/lualine/extensions/conductor_input.lua` exposes the same text to
+  lualine (which otherwise overwrites window-local statuslines).
 - `completion.lua` — `/` command completion for the input bar: registers the
   `conductor.blink` source with blink.cmp at runtime (and restricts the
   `conductor_input` filetype to it unless the user configured that filetype),
@@ -74,10 +80,9 @@ the browser and jumps/scrolls to the line.
   menu first.
 - `blink.lua` — the blink.cmp source (enabled only in `conductor_input`).
 - `sidebar.lua` — live sessions sidebar, one row per session with a
-  color-coded status light (`ConductorLed*` groups). The selected managed
-  session expands into a detail tree (model, thinking level, context usage)
-  filled from `instance.info`; the cursor is pinned to its session across
-  re-renders and `j`/`k` jump between session rows. Push-updated via the
+  color-coded status light (`ConductorLed*` groups). Rows never expand —
+  session details live in the input window statusline. The cursor is pinned
+  to its session across re-renders and `j`/`k` jump between session rows. Push-updated via the
   `User ConductorUpdate` autocmd (no polling).
 - `supervisor.lua` — owns managed instances, tracks status, broadcasts changes
   via `User ConductorUpdate`. `refresh_info()` fills `instance.info` through

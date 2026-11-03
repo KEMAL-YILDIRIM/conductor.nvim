@@ -1,26 +1,24 @@
 ---Live sessions sidebar: one row per session with a color-coded status light.
----The selected managed session expands into a detail tree (model, thinking
----level, context window usage). Updates are pushed via the
----`User ConductorUpdate` autocmd (no polling for managed instances).
+---Session details (model, thinking level, context usage) live in the chat
+---input window's statusline (see `conductor.statusline`). Updates are pushed
+---via the `User ConductorUpdate` autocmd (no polling for managed instances).
 local M = {}
 
----One session row in the rendered panel. A collapsed row spans one line; the
----selected managed row also spans its detail lines (`first`..`last`).
+---One session row (a single line) in the rendered panel.
 ---@class ConductorSidebarRow
 ---@field key string stable identity across renders ('i:<id>' / 'e:<pid>')
 ---@field instance_id integer|nil managed instance id
 ---@field external ConductorExternalSession|nil external (terminal) session
----@field first integer 1-based header line
----@field last integer 1-based last line (== first when collapsed)
+---@field first integer 1-based line of the row
 
 local state = {
   bufnr = nil, ---@type integer|nil
   winid = nil, ---@type integer|nil
   ---Rows in display order.
   rows = {}, ---@type ConductorSidebarRow[]
-  ---Maps every line a row spans (header + details) to that row.
+  ---Maps each row's line to that row.
   line_to_row = {}, ---@type table<integer, ConductorSidebarRow>
-  ---Key of the expanded (selected) row.
+  ---Key of the selected row (follows the cursor).
   selected_key = nil, ---@type string|nil
   autocmd_id = nil, ---@type integer|nil
   refresh_timer = nil, ---@type uv.uv_timer_t|nil
@@ -38,15 +36,7 @@ local status_led_groups = {
   readonly = 'ConductorLedExited',
 }
 
-local status_labels = {
-  starting = 'starting',
-  idle = 'idle',
-  streaming = 'running',
-  needs_input = 'waiting',
-  error = 'error',
-  exited = 'exited',
-  readonly = 'read-only',
-}
+local status_labels = require('conductor.statusline').status_labels
 
 local namespace = vim.api.nvim_create_namespace 'conductor_sidebar'
 
@@ -64,8 +54,6 @@ local function ensure_highlights()
   define('ConductorLedError', { fg = '#e86671' })
   define('ConductorLedExited', { fg = '#5c6370' })
   define('ConductorSidebarStatus', { link = 'Comment' })
-  define('ConductorSidebarLabel', { link = 'Comment' })
-  define('ConductorSidebarTree', { link = 'NonText' })
   define('ConductorSidebarSection', { link = 'Title' })
 end
 
@@ -111,66 +99,6 @@ local function truncate(text, max_width)
   return ''
 end
 
----Compact token count: 60000 → '60k', 1048576 → '1.0M'.
----@param count number
----@return string
-local function short_count(count)
-  if count >= 1000000 then
-    return ('%.1fM'):format(count / 1000000)
-  elseif count >= 1000 then
-    return ('%dk'):format(math.floor(count / 1000 + 0.5))
-  end
-  return tostring(math.floor(count))
-end
-
----Render an info field: `nil` = still loading, `false` = absent.
----@param value any
----@param absent string
----@return string
-local function info_text(value, absent)
-  if value == nil then
-    return '…'
-  elseif value == false then
-    return absent
-  end
-  return value
-end
-
----@param context { tokens: number|nil, window: number|nil, percent: number|nil }|false|nil
----@return string
-local function context_text(context)
-  if context == nil then
-    return '…'
-  elseif context == false or not context.window then
-    return '—'
-  elseif not context.tokens then
-    -- Unknown right after a compaction until the next turn.
-    return ('? / %s'):format(short_count(context.window))
-  end
-  local percent = context.percent or (context.tokens / context.window * 100)
-  return ('%s / %s (%d%%)'):format(short_count(context.tokens), short_count(context.window), math.floor(percent + 0.5))
-end
-
----@param instance ConductorInstance
----@return string
-local function instance_status_label(instance)
-  if instance.status == 'exited' and instance.exit_code then
-    return ('exited (%d)'):format(instance.exit_code)
-  end
-  return status_labels[instance.status] or instance.status
-end
-
----Detail lines shown under the selected managed session.
----@param instance ConductorInstance
----@return { label: string, value: string }[]
-local function instance_details(instance)
-  local info = instance.info or {}
-  return {
-    { label = 'model', value = info_text(info.model, 'none') },
-    { label = 'thinking', value = info_text(info.thinking, '—') },
-    { label = 'context', value = context_text(info.context) },
-  }
-end
 
 function M.render()
   if not buffer_valid() then
@@ -180,15 +108,13 @@ function M.render()
   local instances = supervisor.list()
   local all_externals = require('conductor.external').list_cached()
 
-  -- Remember which row the cursor sits on (and how far into it) so the cursor
-  -- stays on the same session even when rows above expand or collapse.
-  local cursor_key, cursor_offset
+  -- Remember which row the cursor sits on so the cursor stays on the same
+  -- session even when rows above appear or disappear.
+  local cursor_key
   if window_valid() and vim.api.nvim_win_get_buf(state.winid) == state.bufnr then
-    local cursor_line = vim.api.nvim_win_get_cursor(state.winid)[1]
-    local row = state.line_to_row[cursor_line]
+    local row = state.line_to_row[vim.api.nvim_win_get_cursor(state.winid)[1]]
     if row then
       cursor_key = row.key
-      cursor_offset = cursor_line - row.first
     end
   end
   local previous_selected = state.selected_key
@@ -251,27 +177,8 @@ function M.render()
     local name_width = width - vim.fn.strdisplaywidth(prefix) - vim.fn.strdisplaywidth(label) - 2
     lines[#lines + 1] = prefix .. truncate(name, name_width)
     row.first = #lines
-    row.last = #lines
     spans[#spans + 1] = { line = #lines - 1, start_col = 1, end_col = 1 + #led_icon, group = status_led_groups[status] or 'ConductorLedExited' }
     status_marks[#status_marks + 1] = { line = #lines - 1, text = label }
-  end
-
-  ---Append the detail tree under the selected managed session.
-  ---@param row ConductorSidebarRow
-  ---@param instance ConductorInstance
-  local function add_details(row, instance)
-    local details = instance_details(instance)
-    for index, detail in ipairs(details) do
-      local branch = index == #details and '└' or '├'
-      local indent = '   '
-      local label = ('%-9s'):format(detail.label)
-      lines[#lines + 1] = indent .. branch .. ' ' .. label .. ' ' .. detail.value
-      local branch_start = #indent
-      local label_start = branch_start + #branch + 1
-      spans[#spans + 1] = { line = #lines - 1, start_col = branch_start, end_col = branch_start + #branch, group = 'ConductorSidebarTree' }
-      spans[#spans + 1] = { line = #lines - 1, start_col = label_start, end_col = label_start + #label, group = 'ConductorSidebarLabel' }
-    end
-    row.last = #lines
   end
 
   if #instances == 0 and #externals == 0 then
@@ -285,11 +192,8 @@ function M.render()
       section_lines[#section_lines + 1] = #lines - 1
       for _, instance in ipairs(instances) do
         ---@type ConductorSidebarRow
-        local row = { key = 'i:' .. instance.id, instance_id = instance.id, first = 0, last = 0 }
-        add_header(row, instance.name, instance.status, instance_status_label(instance))
-        if row.key == selected then
-          add_details(row, instance)
-        end
+        local row = { key = 'i:' .. instance.id, instance_id = instance.id, first = 0 }
+        add_header(row, instance.name, instance.status, require('conductor.statusline').status_label(instance))
         state.rows[#state.rows + 1] = row
       end
     end
@@ -301,7 +205,7 @@ function M.render()
       section_lines[#section_lines + 1] = #lines - 1
       for _, external in ipairs(externals) do
         ---@type ConductorSidebarRow
-        local row = { key = 'e:' .. external.pid, external = external, first = 0, last = 0 }
+        local row = { key = 'e:' .. external.pid, external = external, first = 0 }
         local label = ('%s · pid %d'):format(status_labels[external.status] or external.status, external.pid)
         add_header(row, external.name, external.status, label)
         state.rows[#state.rows + 1] = row
@@ -313,9 +217,7 @@ function M.render()
   end
 
   for _, row in ipairs(state.rows) do
-    for line = row.first, row.last do
-      state.line_to_row[line] = row
-    end
+    state.line_to_row[row.first] = row
   end
 
   vim.bo[state.bufnr].modifiable = true
@@ -336,15 +238,12 @@ function M.render()
     })
   end
 
-  -- Put the cursor back on its session: same offset when that session was
-  -- already the expanded one (push update), else on the new row's header.
+  -- Put the cursor back on its session's row.
   if cursor_key and window_valid() and vim.api.nvim_win_get_buf(state.winid) == state.bufnr then
     for _, row in ipairs(state.rows) do
       if row.key == cursor_key then
-        local offset = cursor_key == previous_selected and cursor_offset or 0
-        local target = math.min(row.first + offset, row.last)
-        if vim.api.nvim_win_get_cursor(state.winid)[1] ~= target then
-          vim.api.nvim_win_set_cursor(state.winid, { target, 0 })
+        if vim.api.nvim_win_get_cursor(state.winid)[1] ~= row.first then
+          vim.api.nvim_win_set_cursor(state.winid, { row.first, 0 })
         end
         break
       end
@@ -497,7 +396,7 @@ function M.open()
     vim.bo[state.bufnr].swapfile = false
     vim.bo[state.bufnr].filetype = 'conductor'
     setup_keymaps()
-    -- Expand whichever session the cursor lands on (any motion, mouse too).
+    -- Selection follows the cursor (any motion, mouse too).
     vim.api.nvim_create_autocmd('CursorMoved', {
       buffer = state.bufnr,
       callback = function()
@@ -505,8 +404,8 @@ function M.open()
           return
         end
         local row = row_at_cursor()
-        if row and row.key ~= state.selected_key then
-          M.render()
+        if row then
+          state.selected_key = row.key
         end
       end,
     })
@@ -566,7 +465,7 @@ function M.open()
   }
   M.render()
 
-  -- Land on the selected (expanded) session's header.
+  -- Land on the selected session's row.
   for _, row in ipairs(state.rows) do
     if row.key == state.selected_key then
       vim.api.nvim_win_set_cursor(state.winid, { row.first, 0 })

@@ -21,6 +21,7 @@ conductor-default_adapter	conductor.txt	/*conductor-default_adapter*
 conductor-external	conductor.txt	/*conductor-external*
 conductor-fzf-lua	conductor.txt	/*conductor-fzf-lua*
 conductor-input-keys	conductor.txt	/*conductor-input-keys*
+conductor-input-statusline	conductor.txt	/*conductor-input-statusline*
 conductor-keymaps	conductor.txt	/*conductor-keymaps*
 conductor-options	conductor.txt	/*conductor-options*
 conductor-picker	conductor.txt	/*conductor-picker*

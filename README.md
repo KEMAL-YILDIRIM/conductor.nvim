@@ -158,6 +158,12 @@ Input bar:
 | `g?` | Toggle the keybinding cheatsheet |
 | `q` | Close the chat view (normal mode) |
 
+The input bar's statusline shows the session's model, thinking level, context usage and status. [lualine](https://github.com/nvim-lualine/lualine.nvim) rewrites every window's statusline, so lualine users should enable the bundled extension:
+
+```lua
+require('lualine').setup { extensions = { 'conductor_input' } }
+```
+
 #### Slash commands and shell shortcuts
 
 pi only runs its built-in commands in its terminal interface, so conductor checks the input bar text before sending it:

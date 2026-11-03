@@ -22,6 +22,17 @@ local views = {}
 ---@type { log_win: integer|nil, input_win: integer|nil, instance: ConductorInstance|nil }
 local shell = { log_win = nil, input_win = nil, instance = nil }
 
+-- Keep the input window's statusline current when model/context/status change.
+vim.api.nvim_create_autocmd('User', {
+  group = vim.api.nvim_create_augroup('conductor_chat_statusline', { clear = true }),
+  pattern = 'ConductorUpdate',
+  callback = function()
+    if shell.input_win and vim.api.nvim_win_is_valid(shell.input_win) then
+      require('conductor.statusline').refresh()
+    end
+  end,
+})
+
 local function view_for(instance)
   views[instance.id] = views[instance.id] or { tool_lines = {} }
   return views[instance.id]
@@ -425,7 +436,9 @@ function M.open(instance, opts)
   vim.wo[shell.input_win].relativenumber = false
   vim.wo[shell.input_win].signcolumn = 'no'
   vim.wo[shell.input_win].winfixheight = true
-  vim.wo[shell.input_win].winbar = '%#Comment# prompt — <CR> send · <S-CR> newline · / commands · !cmd shell · <C-c> stop · <C-k> log '
+  -- Session details (model, thinking, context, status) in the statusline; a
+  -- statusline plugin may replace this (see lua/lualine/extensions/).
+  vim.wo[shell.input_win].statusline = require('conductor.statusline').expression()
 
   shell.instance = instance
   vim.api.nvim_set_current_win(shell.log_win)

@@ -192,6 +192,14 @@ Input bar mappings:                                      *conductor-input-keys*
     <C-x><C-o>  Complete `/` commands manually
     q           Close the chat view (normal mode)
 
+Input bar statusline:                              *conductor-input-statusline*
+
+The input bar's statusline shows the session's model, thinking level,
+context usage and status. lualine rewrites every window's statusline, so
+lualine users should enable the bundled extension: >lua
+    require('lualine').setup { extensions = { 'conductor_input' } }
+<
+
 Tool calls render collapsed as `▶ bash `echo hi``; expanding shows the
 captured output in a fenced code block. Running tools show `…`, failed
 tools `✗`.
