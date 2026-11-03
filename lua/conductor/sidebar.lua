@@ -195,13 +195,15 @@ function M.render()
   -- also appear in the External section. A session lives on the panel once.
   local managed_session_paths = {}
   for _, instance in ipairs(instances) do
-    if instance.session_path then
-      managed_session_paths[instance.session_path] = true
+    local key = supervisor.session_key(instance.session_path)
+    if key then
+      managed_session_paths[key] = true
     end
   end
   local externals = {}
   for _, external in ipairs(all_externals) do
-    if not (external.session_file and managed_session_paths[external.session_file]) then
+    local key = supervisor.session_key(external.session_file)
+    if not (key and managed_session_paths[key]) then
       externals[#externals + 1] = external
     end
   end

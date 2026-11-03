@@ -578,6 +578,12 @@ function M.fetch_info(instance, callback)
       return
     end
     local state = response.data
+    -- A fresh (`n` / `:Conductor new`) instance has no session file until pi
+    -- reports one; record it so the sidebar can dedupe it against its own
+    -- presence entry in the External section.
+    if not instance.session_path and type(state.sessionFile) == 'string' and state.sessionFile ~= '' then
+      instance.session_path = state.sessionFile
+    end
     callback {
       model = type(state.model) == 'table' and model_label(state.model) or false,
       thinking = type(state.thinkingLevel) == 'string' and state.thinkingLevel or false,

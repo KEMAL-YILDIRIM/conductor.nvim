@@ -259,15 +259,34 @@ function M.refresh_info(instance)
   end)
 end
 
+local is_windows = vim.fn.has 'win32' == 1
+
+---Canonical comparison key for a session file path. pi reports paths with
+---backslashes while conductor builds them with forward slashes, and Windows
+---paths are case-insensitive, so raw string equality misses the same file.
+---@param path string|nil
+---@return string|nil
+function M.session_key(path)
+  if type(path) ~= 'string' or path == '' then
+    return nil
+  end
+  local key = vim.fs.normalize(path)
+  if is_windows then
+    key = key:lower()
+  end
+  return key
+end
+
 ---Find a managed instance bound to `session_path`, if any.
 ---@param session_path string|nil
 ---@return ConductorInstance|nil
 function M.find_by_session(session_path)
-  if not session_path then
+  local key = M.session_key(session_path)
+  if not key then
     return nil
   end
   for _, instance in pairs(M.instances) do
-    if instance.session_path == session_path then
+    if M.session_key(instance.session_path) == key then
       return instance
     end
   end
