@@ -385,7 +385,7 @@ local BUILTINS = {
   { name = 'session', description = 'Show session information and statistics', run = run_session },
   { name = 'fork', description = 'Create a new session from an earlier user message', busy = true, run = run_fork },
   { name = 'clone', description = 'Duplicate the session at its current position', busy = true, run = run_clone },
-  { name = 'export', args = '[path]', description = 'Export the session as HTML', run = run_export },
+  { name = 'export', args = '[path]', description = 'Export the session as HTML', run = run_export, bridge_unavailable = true },
   { name = 'copy', description = 'Copy the last assistant reply', run = run_copy },
   {
     name = 'help',
@@ -508,8 +508,13 @@ end
 ---@param text string trimmed input
 ---@return 'handled'|'rejected'|'passthrough' outcome, string|nil replacement
 function M.dispatch(instance, text)
+  local bridged = instance.handle and instance.handle.bridge ~= nil
   local bang, shell_command = text:match '^(!!?)%s*(.-)%s*$'
   if bang then
+    if bridged then
+      warn '!command is not available for a session attached to a terminal pi — run it in the terminal'
+      return 'rejected'
+    end
     if shell_command == '' then
       warn 'empty shell command'
       return 'rejected'
@@ -531,6 +536,10 @@ function M.dispatch(instance, text)
   local argument = vim.trim(rest)
 
   local builtin = BUILTINS_BY_NAME[name]
+  if builtin and builtin.bridge_unavailable and bridged then
+    warn(('/%s is not available for a session attached to a terminal pi — run it in the terminal'):format(name))
+    return 'rejected'
+  end
   if builtin then
     if builtin.busy and instance.status == 'streaming' then
       warn(('/%s is not available while the agent is replying — stop it first (<C-c>)'):format(name))

@@ -220,6 +220,24 @@ function M.find_live(session_path)
   return nil
 end
 
+---Read one pi process's presence file directly (no liveness probe). Used by
+---the bridge to find the new pipe after a session switch.
+---@param pid integer
+---@return { bridge: string|nil, session_file: string|nil, mode: string|nil }|nil
+function M.read_presence(pid)
+  local handle = io.open(presence_dir() .. '/' .. pid .. '.json', 'r')
+  if not handle then
+    return nil
+  end
+  local content = handle:read '*a'
+  handle:close()
+  local ok, decoded = pcall(vim.json.decode, content)
+  if not ok or type(decoded) ~= 'table' then
+    return nil
+  end
+  return { bridge = nilable(decoded.bridge), session_file = nilable(decoded.sessionFile), mode = nilable(decoded.mode) }
+end
+
 ---Path to the bundled pi extension (for installation instructions).
 ---@return string|nil
 function M.extension_path()

@@ -35,6 +35,7 @@ local status_led_groups = {
   needs_input = 'ConductorLedWaiting',
   error = 'ConductorLedError',
   exited = 'ConductorLedExited',
+  readonly = 'ConductorLedExited',
 }
 
 local status_labels = {
@@ -44,6 +45,7 @@ local status_labels = {
   needs_input = 'waiting',
   error = 'error',
   exited = 'exited',
+  readonly = 'read-only',
 }
 
 local namespace = vim.api.nvim_create_namespace 'conductor_sidebar'
@@ -414,7 +416,7 @@ local function setup_keymaps()
       local existing = supervisor.find_by_session(external.session_file)
       if existing then
         -- Revive an exited instance on its session file before showing it.
-        supervisor.restart(existing)
+        supervisor.restart(existing, { quiet = true })
         require('conductor.chatlog').open(existing)
         return
       end

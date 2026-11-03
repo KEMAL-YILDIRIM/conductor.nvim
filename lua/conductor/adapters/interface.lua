@@ -13,6 +13,9 @@
 ---  { type = 'notify', message, level }               fire-and-forget notification
 ---  { type = 'error', message }                       command/stream error
 ---  { type = 'user_message', text }                   user prompt echoed by an attached session (see `echoes_user_messages`)
+---  { type = 'terminal_prompt_start', kind, title }   attached session: a dialog is open in the terminal (answer it there)
+---  { type = 'terminal_prompt_end' }                  attached session: that dialog closed
+---  { type = 'bridge_reconnected', bridge }           attached session switched sessions; reconnected to its new pipe
 ---
 ---@class ConductorInstanceHandle
 ---@field prompt fun(text: string, opts?: { streaming?: boolean })
@@ -44,7 +47,7 @@
 ---@field parse_log_async nil|fun(path: string, callback: fun(ok: boolean, result_or_error: { meta: ConductorSessionMeta, entries: ConductorLogEntry[] }|string)) same as parse_log, off the main thread; falls back to parse_log when absent
 ---@field resume_cmd fun(session: ConductorSession): string[] argv to resume the session in a terminal
 ---@field spawn nil|fun(opts: { cwd?: string, session_path?: string, name?: string, ephemeral?: boolean, on_event: fun(event: table), on_exit: fun(code: integer) }): ConductorInstanceHandle
----@field connect nil|fun(opts: { bridge: string, on_event: fun(event: table), on_exit: fun(code: integer) }): ConductorInstanceHandle|nil, string|nil attach to an already-running session through its bridge pipe (kill = detach only)
+---@field connect nil|fun(opts: { bridge: string, pid?: integer, on_event: fun(event: table), on_exit: fun(code: integer) }): ConductorInstanceHandle|nil, string|nil attach to an already-running session through its bridge pipe (kill = detach only)
 ---@field sessions_root nil|fun(): string session storage root (required for fs ops)
 ---@field dispatch_input nil|fun(instance: ConductorInstance, text: string): 'handled'|'rejected'|'passthrough', string|nil intercept chat input (built-in slash commands, shell shortcuts) before it is sent as a prompt; second return = replacement prompt text
 ---@field list_commands nil|fun(instance: ConductorInstance, callback: fun(items: ConductorCommandItem[])) slash commands for `/` completion (may call back synchronously when cached)

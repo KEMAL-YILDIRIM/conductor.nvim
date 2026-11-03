@@ -47,6 +47,10 @@ local function render_lines(instance)
   end
 
   add(('# %s  `%s`'):format(instance.name, instance.status))
+  if instance.readonly then
+    add '> read-only: this session runs in a terminal pi without the conductor bridge.'
+    add '> Update conductor-presence and restart that pi to chat from here.'
+  end
   add ''
   for index, entry in ipairs(instance.log) do
     if entry.role == 'user' then

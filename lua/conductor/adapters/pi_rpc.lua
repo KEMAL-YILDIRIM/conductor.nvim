@@ -53,6 +53,11 @@ local function translate(decoded, emit, pending)
     if type(decoded.text) == 'string' and decoded.text ~= '' then
       emit { type = 'user_message', text = decoded.text }
     end
+  elseif kind == 'terminal_prompt_start' then
+    -- Bridge only: a dialog is open in the terminal pi (answer it there).
+    emit { type = 'terminal_prompt_start', kind = type(decoded.kind) == 'string' and decoded.kind or 'dialog', title = type(decoded.title) == 'string' and decoded.title or nil }
+  elseif kind == 'terminal_prompt_end' then
+    emit { type = 'terminal_prompt_end' }
   elseif kind == 'agent_start' then
     emit { type = 'agent_start' }
   elseif kind == 'agent_end' then

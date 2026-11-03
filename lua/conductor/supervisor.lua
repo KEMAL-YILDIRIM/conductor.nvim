@@ -124,9 +124,43 @@ local function on_event(instance, event)
     local level = event.level == 'error' and vim.log.levels.ERROR or event.level == 'warning' and vim.log.levels.WARN or vim.log.levels.INFO
     vim.notify(('[%s] %s'):format(instance.name, event.message), level)
   elseif event.type == 'error' then
-    instance.log[#instance.log + 1] = { role = 'system', text = '[error] ' .. event.message }
+    instance.log[#instance.log + 1] = { role = 'system', text = '[error] ' .. event.message, local_note = true }
     set_status(instance, 'error')
     chatlog.refresh(instance)
+  elseif event.type == 'terminal_prompt_start' then
+    -- Bridge only: a dialog is open in the terminal pi. It can only be
+    -- answered there; show a transient note and flag the session.
+    if instance.prompt_note then
+      M.remove_entry(instance, instance.prompt_note)
+    end
+    local title = event.title and (' — ' .. event.title) or ''
+    instance.prompt_note = {
+      role = 'system',
+      text = ('waiting in the terminal: %s%s (answer it in the terminal pi)'):format(event.kind or 'dialog', title),
+      local_note = true,
+      transient = true,
+    }
+    instance.log[#instance.log + 1] = instance.prompt_note
+    if instance.status_before_prompt == nil then
+      instance.status_before_prompt = instance.status
+    end
+    set_status(instance, 'needs_input')
+    chatlog.refresh(instance)
+  elseif event.type == 'terminal_prompt_end' then
+    if instance.prompt_note then
+      M.remove_entry(instance, instance.prompt_note)
+      instance.prompt_note = nil
+    end
+    local before = instance.status_before_prompt
+    instance.status_before_prompt = nil
+    if before and instance.status == 'needs_input' then
+      set_status(instance, before)
+    end
+    chatlog.refresh(instance)
+  elseif event.type == 'bridge_reconnected' then
+    -- The terminal pi switched sessions (/new, /fork, /clone from either
+    -- side): follow it to the new session file.
+    M.follow_session(instance)
   end
 end
 
@@ -135,7 +169,7 @@ end
 ---@param instance ConductorInstance
 ---@param adapter table
 ---With `opts.bridge`, attaches to that running terminal pi instead of spawning.
----@param opts { session_path?: string, name?: string, ephemeral?: boolean, bridge?: string }
+---@param opts { session_path?: string, name?: string, ephemeral?: boolean, bridge?: string, pid?: integer }
 ---@return ConductorInstanceHandle|nil handle, string|nil error
 local function start_process(instance, adapter, opts)
   local handle, spawn_error
@@ -156,7 +190,7 @@ local function start_process(instance, adapter, opts)
     if not adapter.connect then
       return nil, ('adapter %q cannot attach to a running session'):format(instance.adapter)
     end
-    handle, spawn_error = adapter.connect { bridge = opts.bridge, on_event = on_adapter_event, on_exit = on_adapter_exit }
+    handle, spawn_error = adapter.connect { bridge = opts.bridge, pid = opts.pid, on_event = on_adapter_event, on_exit = on_adapter_exit }
     return handle, spawn_error
   end
   handle, spawn_error = adapter.spawn {
@@ -170,26 +204,69 @@ local function start_process(instance, adapter, opts)
   return handle, spawn_error
 end
 
----One session file, one pi process: if a terminal pi already owns
----`session_path`, return its bridge so we attach to it instead of spawning a
----second writer. Errors when that pi runs an extension without a bridge.
+---One session file, one pi process: the terminal pi that owns
+---`session_path`, if any. With a `bridge` we attach to it; without one (old
+---extension) the session can only be shown read-only.
 ---@param session_path string|nil
----@return string|nil bridge, string|nil error
+---@return { pid: integer, bridge: string|nil }|nil
 local function resolve_live_owner(session_path)
   if not session_path then
-    return nil, nil
+    return nil
   end
-  local live = require('conductor.external').find_live(session_path)
-  if not live then
-    return nil, nil
+  return require('conductor.external').find_live(session_path)
+end
+
+---@param pid integer
+---@return string
+local function readonly_message(pid)
+  return ('this session is open in a terminal pi (pid %d) without the conductor bridge — showing it read-only. Update conductor-presence and restart that pi to attach live.'):format(
+    pid
+  )
+end
+
+---Stop the read-only file watcher, if any.
+---@param instance ConductorInstance
+local function stop_watch(instance)
+  local watcher = instance.watcher
+  instance.watcher = nil
+  if watcher and not watcher:is_closing() then
+    watcher:stop()
+    watcher:close()
   end
-  if not live.bridge then
-    return nil,
-      ('this session is open in a terminal pi (pid %d) without the conductor bridge — update conductor-presence and restart that pi to attach live'):format(
-        live.pid
-      )
+end
+
+---Show a session owned by a bridgeless terminal pi read-only: no process,
+---history from the file, reloaded whenever the file changes.
+---@param instance ConductorInstance
+local function enter_readonly(instance)
+  instance.readonly = true
+  set_status(instance, 'readonly')
+  M.load_history(instance, { force = true })
+  if instance.watcher or not instance.session_path then
+    return
   end
-  return live.bridge, nil
+  local watcher = vim.uv.new_fs_poll()
+  if not watcher then
+    return
+  end
+  instance.watcher = watcher
+  watcher:start(
+    instance.session_path,
+    1000,
+    vim.schedule_wrap(function(poll_error)
+      if poll_error or instance.watcher ~= watcher or not instance.readonly then
+        return
+      end
+      M.load_history(instance, { force = true })
+    end)
+  )
+end
+
+---Leave read-only mode (a live process is taking over).
+---@param instance ConductorInstance
+local function leave_readonly(instance)
+  instance.readonly = nil
+  stop_watch(instance)
 end
 
 ---Build a fresh instance record (not yet registered, no process).
@@ -234,14 +311,18 @@ function M.spawn(opts)
     return nil, persist.claimed_message(owner)
   end
 
-  local bridge, live_error = resolve_live_owner(opts.session_path)
-  if live_error then
-    return nil, live_error
-  end
+  local live = resolve_live_owner(opts.session_path)
 
   local instance = new_instance(adapter_name, opts)
 
-  local handle, spawn_error = start_process(instance, adapter, vim.tbl_extend('force', opts, { bridge = bridge }))
+  if live and not live.bridge then
+    M.instances[instance.id] = instance
+    enter_readonly(instance)
+    vim.notify('conductor: ' .. readonly_message(live.pid), vim.log.levels.WARN)
+    return instance
+  end
+
+  local handle, spawn_error = start_process(instance, adapter, vim.tbl_extend('force', opts, { bridge = live and live.bridge, pid = live and live.pid }))
   if not handle then
     return nil, spawn_error
   end
@@ -270,9 +351,12 @@ end
 
 ---Restart the agent process of an exited instance, resuming its session file.
 ---Keeps the instance id, chat log and chat buffer. No-op if it is still alive.
+---A session owned by a bridgeless terminal pi stays read-only (`opts.quiet`
+---skips the warning, e.g. when merely reopening its chat).
 ---@param instance ConductorInstance
+---@param opts { quiet?: boolean }|nil
 ---@return boolean ok
-function M.restart(instance)
+function M.restart(instance, opts)
   if instance.handle then
     return true
   end
@@ -292,18 +376,25 @@ function M.restart(instance)
     return false
   end
 
-  local bridge, live_error = resolve_live_owner(instance.session_path)
-  if live_error then
-    vim.notify('conductor: ' .. live_error, vim.log.levels.WARN)
+  local live = resolve_live_owner(instance.session_path)
+  if live and not live.bridge then
+    if not instance.readonly then
+      enter_readonly(instance)
+    end
+    if not (opts and opts.quiet) then
+      vim.notify('conductor: ' .. readonly_message(live.pid), vim.log.levels.WARN)
+    end
     return false
   end
 
-  local handle, spawn_error = start_process(instance, adapter, { session_path = instance.session_path, name = instance.name, bridge = bridge })
+  local handle, spawn_error =
+    start_process(instance, adapter, { session_path = instance.session_path, name = instance.name, bridge = live and live.bridge, pid = live and live.pid })
   if not handle then
     vim.notify('conductor: restart failed: ' .. (spawn_error or 'unknown error'), vim.log.levels.ERROR)
     return false
   end
 
+  leave_readonly(instance)
   instance.handle = handle
   instance.exit_code = nil
   instance.pending_ui = nil
@@ -388,6 +479,45 @@ function M.find_by_session(session_path)
   return nil
 end
 
+---Re-insert conductor's own notes (command results, errors) into a log rebuilt
+---from disk. Each note keeps its position relative to the user messages: it
+---goes back right before the user message that followed it. Transient notes
+---(an open terminal dialog) are dropped.
+---@param old_log ConductorChatEntry[]
+---@param entries ConductorChatEntry[]
+---@return ConductorChatEntry[]
+local function merge_local_notes(old_log, entries)
+  local notes = {}
+  local users = 0
+  for _, entry in ipairs(old_log) do
+    if entry.role == 'user' then
+      users = users + 1
+    elseif entry.local_note and not entry.transient then
+      notes[#notes + 1] = { anchor = users, entry = entry }
+    end
+  end
+  if #notes == 0 then
+    return entries
+  end
+  local merged = {}
+  local note_index = 1
+  local seen = 0
+  for _, entry in ipairs(entries) do
+    if entry.role == 'user' then
+      while notes[note_index] and notes[note_index].anchor <= seen do
+        merged[#merged + 1] = notes[note_index].entry
+        note_index = note_index + 1
+      end
+      seen = seen + 1
+    end
+    merged[#merged + 1] = entry
+  end
+  for index = note_index, #notes do
+    merged[#merged + 1] = notes[index].entry
+  end
+  return merged
+end
+
 ---Populate `instance.log` from the session file on disk (used when attaching to
 ---an existing session). No-op when the log already has entries, unless
 ---`opts.force` (bridged sessions resync after each turn): then the log is
@@ -413,7 +543,7 @@ function M.load_history(instance, opts)
       if instance.log ~= log_before or #instance.log ~= length_before or instance.partial ~= '' or instance.status == 'streaming' then
         return
       end
-      instance.log = entries
+      instance.log = merge_local_notes(log_before, entries)
       require('conductor.chatlog').refresh(instance)
       return
     end
@@ -454,7 +584,52 @@ end
 ---@param instance ConductorInstance
 ---@param text string
 function M.note(instance, text)
-  M.append(instance, { role = 'system', text = text })
+  -- `local_note`: not in the session file; kept across resyncs from disk.
+  M.append(instance, { role = 'system', text = text, local_note = true })
+end
+
+---Remove one entry (by identity) from the chat log.
+---@param instance ConductorInstance
+---@param target ConductorChatEntry
+function M.remove_entry(instance, target)
+  for index = #instance.log, 1, -1 do
+    if instance.log[index] == target then
+      table.remove(instance.log, index)
+      return
+    end
+  end
+end
+
+---After an attached terminal pi switched sessions, ask it for its session file
+---and, when it changed, reload the chat from the new file.
+---@param instance ConductorInstance
+function M.follow_session(instance)
+  local handle = instance.handle
+  if not handle or not handle.request then
+    return
+  end
+  instance.prompt_note = nil
+  instance.status_before_prompt = nil
+  handle.request({ type = 'get_state' }, function(response)
+    if response.success == false or type(response.data) ~= 'table' then
+      return
+    end
+    local state = response.data
+    local session_file = type(state.sessionFile) == 'string' and state.sessionFile or nil
+    if session_file and M.session_key(session_file) ~= M.session_key(instance.session_path) then
+      instance.session_path = session_file
+      M.reset_log(instance)
+      M.load_history(instance)
+    end
+    if type(state.sessionName) == 'string' and state.sessionName ~= '' then
+      instance.name = state.sessionName
+    end
+    if instance.status == 'streaming' and state.isStreaming ~= true then
+      set_status(instance, 'idle')
+    end
+    broadcast()
+    M.refresh_info(instance)
+  end)
 end
 
 ---Clear the local chat log (after the agent switched to another session).
@@ -516,6 +691,7 @@ end
 ---Kill the process and forget the instance.
 ---@param instance ConductorInstance
 function M.remove(instance)
+  stop_watch(instance)
   if instance.handle then
     instance.handle.kill()
     instance.handle = nil
