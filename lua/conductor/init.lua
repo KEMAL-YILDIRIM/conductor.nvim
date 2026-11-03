@@ -40,7 +40,7 @@ function M.setup(opts)
           vim.notify('conductor: location must not be empty', vim.log.levels.ERROR)
           return
         end
-        local instance, spawn_error = require('conductor.supervisor').spawn { name = name, cwd = cwd }
+        local instance, spawn_error = require('conductor.supervisor').spawn { name = name, name_explicit = name ~= nil, cwd = cwd }
         if instance then
           require('conductor.sidebar').open()
           require('conductor.chatlog').open(instance)

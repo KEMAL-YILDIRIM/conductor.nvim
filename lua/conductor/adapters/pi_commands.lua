@@ -79,6 +79,7 @@ local function sync_state(instance, after)
     instance.session_path = type(state.sessionFile) == 'string' and state.sessionFile or nil
     if type(state.sessionName) == 'string' and state.sessionName ~= '' then
       instance.name = state.sessionName
+      instance.name_explicit = true
     end
     supervisor().broadcast()
     supervisor().refresh_info(instance)
@@ -214,6 +215,7 @@ local function run_name(instance, argument)
   end
   request(instance, { type = 'set_session_name', name = argument }, function()
     instance.name = argument
+    instance.name_explicit = true
     supervisor().broadcast()
     note(instance, 'renamed to ' .. argument)
   end)

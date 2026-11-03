@@ -446,7 +446,7 @@ local function setup_keymaps()
       if name == nil then
         return
       end
-      local instance, spawn_error = require('conductor.supervisor').spawn { name = name ~= '' and name or nil }
+      local instance, spawn_error = require('conductor.supervisor').spawn { name = name ~= '' and name or nil, name_explicit = name ~= '' }
       if not instance then
         vim.notify('conductor: ' .. (spawn_error or 'spawn failed'), vim.log.levels.ERROR)
         return

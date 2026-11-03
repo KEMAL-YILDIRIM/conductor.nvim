@@ -1234,6 +1234,7 @@ local function create_new_session()
         adapter = state.adapter.name,
         cwd = cwd,
         name = name ~= '' and name or nil,
+        name_explicit = name ~= '',
       }
       if not instance then
         vim.notify('conductor: ' .. (spawn_error or 'spawn failed'), vim.log.levels.ERROR)

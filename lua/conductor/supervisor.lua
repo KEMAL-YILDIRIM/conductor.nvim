@@ -279,6 +279,8 @@ local function new_instance(adapter_name, opts)
   return {
     id = next_id,
     name = opts.name or ('%s #%d'):format(adapter_name, next_id),
+    -- true = a name the user/pi chose; false = derived (refreshed from the file).
+    name_explicit = opts.name_explicit == true,
     adapter = adapter_name,
     cwd = opts.cwd or vim.fn.getcwd(),
     session_path = opts.session_path,
@@ -456,6 +458,11 @@ end
 ---@return ConductorInstance
 function M.restore(entry)
   local instance = new_instance(entry.adapter, entry)
+  -- The saved file doesn't record whether a name was chosen. A name equal to
+  -- the session file's own name is a fallback, never a choice: let the
+  -- history load replace it with the first question.
+  local file_name = entry.session_path and vim.fn.fnamemodify(entry.session_path, ':t:r')
+  instance.name_explicit = entry.name ~= nil and entry.name ~= file_name
   instance.status = 'idle'
   M.instances[instance.id] = instance
   broadcast()
@@ -518,6 +525,40 @@ local function merge_local_notes(old_log, entries)
   return merged
 end
 
+---Display name derived from a first user message: first line, max 60 chars
+---(same rule as the sidebar's External section).
+---@param text string
+---@return string
+local function name_from_text(text)
+  local first_line = vim.trim((text:gsub('\n.*', '')))
+  if vim.fn.strchars(first_line) > 60 then
+    first_line = vim.fn.strcharpart(first_line, 0, 57) .. '…'
+  end
+  return first_line
+end
+
+---Refresh the instance name from parsed session metadata: the file's explicit
+---name wins; otherwise a derived name follows the first user message.
+---@param instance ConductorInstance
+---@param meta ConductorSessionMeta|nil
+local function refresh_name(instance, meta)
+  if type(meta) ~= 'table' then
+    return
+  end
+  local name
+  if type(meta.name) == 'string' and meta.name ~= '' then
+    name = meta.name
+    instance.name_explicit = true
+  elseif not instance.name_explicit and type(meta.first_user_text) == 'string' and meta.first_user_text ~= '' then
+    name = name_from_text(meta.first_user_text)
+  end
+  if name and name ~= '' and name ~= instance.name then
+    instance.name = name
+    broadcast()
+    require('conductor.chatlog').refresh(instance)
+  end
+end
+
 ---Populate `instance.log` from the session file on disk (used when attaching to
 ---an existing session). No-op when the log already has entries, unless
 ---`opts.force` (bridged sessions resync after each turn): then the log is
@@ -533,10 +574,11 @@ function M.load_history(instance, opts)
   local log_before = instance.log
   local length_before = #log_before
 
-  local function apply(entries)
+  local function apply(entries, meta)
     if type(entries) ~= 'table' then
       return
     end
+    refresh_name(instance, meta)
     if force then
       -- Skip if a new turn started or events arrived during the parse; the
       -- next agent_end resyncs again.
@@ -561,12 +603,12 @@ function M.load_history(instance, opts)
   if adapter.parse_log_async then
     adapter.parse_log_async(instance.session_path, function(ok, result)
       if ok and type(result) == 'table' then
-        apply(result.entries)
+        apply(result.entries, result.meta)
       end
     end)
   elseif adapter.parse_log then
-    local _, entries = adapter.parse_log(instance.session_path)
-    apply(entries)
+    local meta, entries = adapter.parse_log(instance.session_path)
+    apply(entries, meta)
   end
 end
 
@@ -623,6 +665,7 @@ function M.follow_session(instance)
     end
     if type(state.sessionName) == 'string' and state.sessionName ~= '' then
       instance.name = state.sessionName
+      instance.name_explicit = true
     end
     if instance.status == 'streaming' and state.isStreaming ~= true then
       set_status(instance, 'idle')
