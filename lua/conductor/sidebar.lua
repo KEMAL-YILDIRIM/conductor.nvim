@@ -512,14 +512,10 @@ function M.open()
     })
   end
 
-  -- If the all-sessions browser already owns the current tab, open the live
-  -- sessions panel on a fresh tab so the two layouts don't fight over the
-  -- same window space. Otherwise carve a left split out of the current tab.
+  -- Always open on a dedicated tab so the user's working tab is never split
+  -- or resized: empty main window on the right, sidebar split off its left.
   local width = require('conductor.config').options.sidebar.width
-  if require('conductor.browser').is_open() then
-    -- Fresh tab: empty main window on the right, sidebar split off its left.
-    vim.cmd 'tabnew'
-  end
+  require('conductor.tabs').open_dedicated()
   vim.cmd(('topleft %dvsplit'):format(width))
   state.winid = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(state.winid, state.bufnr)
@@ -580,7 +576,12 @@ function M.open()
 end
 
 function M.close()
-  if window_valid() then
+  -- Tear down the dedicated tab when it holds only the sidebar (or the blank
+  -- scratch); otherwise close just the sidebar window.
+  local closed_tab = require('conductor.tabs').close_if_owned(state.winid, function(window)
+    return window == state.winid
+  end)
+  if not closed_tab and window_valid() then
     vim.api.nvim_win_close(state.winid, true)
   end
   state.winid = nil

@@ -1377,7 +1377,12 @@ function M.open(opts)
     end,
   })
 
+  -- Dedicated tab: never split or resize the user's working tab. The blank
+  -- scratch window `:tabnew` leaves on the right becomes the content pane
+  -- (ensure_content_win adopts the window to the right of the list).
   local width = require('conductor.config').options.browser.width
+  state.content_win = nil
+  require('conductor.tabs').open_dedicated()
   vim.cmd(('topleft %dvsplit'):format(width))
   state.list_win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(state.list_win, state.list_buf)
@@ -1451,6 +1456,18 @@ end
 
 function M.close()
   state.preview_generation = state.preview_generation + 1
+  -- Tear down the browser's dedicated tab when it holds only browser windows
+  -- (or the blank scratch); otherwise close just the browser's own windows.
+  local closed_tab = require('conductor.tabs').close_if_owned(state.list_win, function(window)
+    return window == state.list_win
+      or (window == state.content_win and buf_valid(state.content_buf) and vim.api.nvim_win_get_buf(window) == state.content_buf)
+  end)
+  if closed_tab then
+    state.list_win = nil
+    state.content_win = nil
+    state.current_path = nil
+    return
+  end
   if win_valid(state.content_win) and buf_valid(state.content_buf) then
     -- Only close the content window if it is still showing our buffer.
     if vim.api.nvim_win_get_buf(state.content_win) == state.content_buf then
