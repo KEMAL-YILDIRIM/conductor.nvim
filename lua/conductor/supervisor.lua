@@ -66,6 +66,14 @@ local function on_event(instance, event)
   if event.type == 'agent_start' then
     instance.pending_ui = nil
     set_status(instance, 'streaming')
+  elseif event.type == 'user_message' then
+    -- Echoed by the bridge: a prompt typed in the terminal, or one we sent.
+    if instance.partial ~= '' then
+      instance.log[#instance.log + 1] = { role = 'assistant', text = instance.partial }
+      instance.partial = ''
+    end
+    instance.log[#instance.log + 1] = { role = 'user', text = event.text }
+    chatlog.refresh(instance)
   elseif event.type == 'agent_end' then
     if instance.partial ~= '' then
       instance.log[#instance.log + 1] = { role = 'assistant', text = instance.partial }
@@ -76,6 +84,11 @@ local function on_event(instance, event)
     end
     chatlog.refresh(instance)
     M.refresh_info(instance)
+    -- A bridged session is written by the terminal pi: resync from its file so
+    -- anything missed while attaching (or a turn already running) self-heals.
+    if instance.handle and instance.handle.echoes_user_messages then
+      M.load_history(instance, { force = true })
+    end
   elseif event.type == 'text_start' then
     if instance.partial ~= '' then
       instance.log[#instance.log + 1] = { role = 'assistant', text = instance.partial }
@@ -121,30 +134,62 @@ end
 ---Used both for a fresh spawn and for restarting an exited instance.
 ---@param instance ConductorInstance
 ---@param adapter table
----@param opts { session_path?: string, name?: string, ephemeral?: boolean }
+---With `opts.bridge`, attaches to that running terminal pi instead of spawning.
+---@param opts { session_path?: string, name?: string, ephemeral?: boolean, bridge?: string }
 ---@return ConductorInstanceHandle|nil handle, string|nil error
 local function start_process(instance, adapter, opts)
   local handle, spawn_error
+  local function on_adapter_event(event)
+    on_event(instance, event)
+  end
+  local function on_adapter_exit(code)
+    -- A late exit from a previous process must not clobber a restarted one.
+    if instance.handle ~= handle then
+      return
+    end
+    instance.exit_code = code
+    instance.handle = nil
+    instance.pending_ui = nil
+    set_status(instance, 'exited')
+  end
+  if opts.bridge then
+    if not adapter.connect then
+      return nil, ('adapter %q cannot attach to a running session'):format(instance.adapter)
+    end
+    handle, spawn_error = adapter.connect { bridge = opts.bridge, on_event = on_adapter_event, on_exit = on_adapter_exit }
+    return handle, spawn_error
+  end
   handle, spawn_error = adapter.spawn {
     cwd = instance.cwd,
     session_path = opts.session_path,
     name = opts.name,
     ephemeral = opts.ephemeral,
-    on_event = function(event)
-      on_event(instance, event)
-    end,
-    on_exit = function(code)
-      -- A late exit from a previous process must not clobber a restarted one.
-      if instance.handle ~= handle then
-        return
-      end
-      instance.exit_code = code
-      instance.handle = nil
-      instance.pending_ui = nil
-      set_status(instance, 'exited')
-    end,
+    on_event = on_adapter_event,
+    on_exit = on_adapter_exit,
   }
   return handle, spawn_error
+end
+
+---One session file, one pi process: if a terminal pi already owns
+---`session_path`, return its bridge so we attach to it instead of spawning a
+---second writer. Errors when that pi runs an extension without a bridge.
+---@param session_path string|nil
+---@return string|nil bridge, string|nil error
+local function resolve_live_owner(session_path)
+  if not session_path then
+    return nil, nil
+  end
+  local live = require('conductor.external').find_live(session_path)
+  if not live then
+    return nil, nil
+  end
+  if not live.bridge then
+    return nil,
+      ('this session is open in a terminal pi (pid %d) without the conductor bridge — update conductor-presence and restart that pi to attach live'):format(
+        live.pid
+      )
+  end
+  return live.bridge, nil
 end
 
 ---Build a fresh instance record (not yet registered, no process).
@@ -189,9 +234,14 @@ function M.spawn(opts)
     return nil, persist.claimed_message(owner)
   end
 
+  local bridge, live_error = resolve_live_owner(opts.session_path)
+  if live_error then
+    return nil, live_error
+  end
+
   local instance = new_instance(adapter_name, opts)
 
-  local handle, spawn_error = start_process(instance, adapter, opts)
+  local handle, spawn_error = start_process(instance, adapter, vim.tbl_extend('force', opts, { bridge = bridge }))
   if not handle then
     return nil, spawn_error
   end
@@ -242,7 +292,13 @@ function M.restart(instance)
     return false
   end
 
-  local handle, spawn_error = start_process(instance, adapter, { session_path = instance.session_path, name = instance.name })
+  local bridge, live_error = resolve_live_owner(instance.session_path)
+  if live_error then
+    vim.notify('conductor: ' .. live_error, vim.log.levels.WARN)
+    return false
+  end
+
+  local handle, spawn_error = start_process(instance, adapter, { session_path = instance.session_path, name = instance.name, bridge = bridge })
   if not handle then
     vim.notify('conductor: restart failed: ' .. (spawn_error or 'unknown error'), vim.log.levels.ERROR)
     return false
@@ -333,18 +389,37 @@ function M.find_by_session(session_path)
 end
 
 ---Populate `instance.log` from the session file on disk (used when attaching to
----an existing session). No-op when the log already has entries.
+---an existing session). No-op when the log already has entries, unless
+---`opts.force` (bridged sessions resync after each turn): then the log is
+---replaced, provided nothing streamed in while the file was being parsed.
 ---@param instance ConductorInstance
-function M.load_history(instance)
-  if not instance.session_path or #instance.log > 0 then
+---@param opts { force?: boolean }|nil
+function M.load_history(instance, opts)
+  local force = opts and opts.force
+  if not instance.session_path or (#instance.log > 0 and not force) then
     return
   end
   local adapter = require('conductor.adapters.interface').get(instance.adapter)
+  local log_before = instance.log
+  local length_before = #log_before
 
   local function apply(entries)
+    if type(entries) ~= 'table' then
+      return
+    end
+    if force then
+      -- Skip if a new turn started or events arrived during the parse; the
+      -- next agent_end resyncs again.
+      if instance.log ~= log_before or #instance.log ~= length_before or instance.partial ~= '' or instance.status == 'streaming' then
+        return
+      end
+      instance.log = entries
+      require('conductor.chatlog').refresh(instance)
+      return
+    end
     -- Guard against a race where the agent streamed events before the parse
     -- finished: only seed history if the log is still empty.
-    if #instance.log > 0 or type(entries) ~= 'table' then
+    if #instance.log > 0 then
       return
     end
     for _, entry in ipairs(entries) do
@@ -422,7 +497,10 @@ function M.prompt(instance, text)
     vim.notify('conductor: instance has exited', vim.log.levels.ERROR)
     return
   end
-  instance.log[#instance.log + 1] = { role = 'user', text = text }
+  -- A bridged pi echoes the prompt back as a `user_message` event.
+  if not instance.handle.echoes_user_messages then
+    instance.log[#instance.log + 1] = { role = 'user', text = text }
+  end
   instance.handle.prompt(text, { streaming = instance.status == 'streaming' })
   set_status(instance, 'streaming')
   require('conductor.chatlog').refresh(instance)

@@ -10,6 +10,17 @@ local M = {}
 ---@field name string
 ---@field cwd string|nil
 ---@field updated_at string|nil
+---@field bridge string|nil pipe of the conductor-presence bridge (live attach)
+---@field mode string|nil pi run mode ('tui', 'rpc', ...); nil for old extensions
+
+---vim.json.decode maps JSON null to vim.NIL, which is truthy in Lua. Coerce
+---it to nil so `or` fallbacks work as intended.
+local function nilable(value)
+  if value == nil or value == vim.NIL then
+    return nil
+  end
+  return value
+end
 
 ---@return string
 local function presence_dir()
@@ -85,14 +96,6 @@ local function build_sessions(candidates, alive)
   for _, candidate in ipairs(candidates) do
     local decoded = candidate.decoded
     if alive[decoded.pid] then
-      -- vim.json.decode maps JSON null to vim.NIL, which is truthy in Lua.
-      -- Coerce it to nil so `or` fallbacks work as intended.
-      local function nilable(value)
-        if value == nil or value == vim.NIL then
-          return nil
-        end
-        return value
-      end
       local session_file = nilable(decoded.sessionFile)
       local session_name = nilable(decoded.sessionName)
       sessions[#sessions + 1] = {
@@ -102,6 +105,8 @@ local function build_sessions(candidates, alive)
         name = session_name or session_display_name(session_file, decoded.pid),
         cwd = nilable(decoded.cwd),
         updated_at = nilable(decoded.updatedAt),
+        bridge = nilable(decoded.bridge),
+        mode = nilable(decoded.mode),
       }
     else
       -- Stale presence file from a crashed/killed process.
@@ -177,6 +182,42 @@ function M.refresh_async(opts)
     end
     finish(alive)
   end
+end
+
+---Synchronous liveness probe for one pid (explicit user actions only).
+---@param pid integer
+---@return boolean
+local function pid_alive(pid)
+  if vim.fn.has 'win32' == 1 then
+    local ok, result = pcall(function()
+      return vim.system({ 'tasklist', '/NH', '/FO', 'CSV', '/FI', 'PID eq ' .. pid }, { text = true }):wait(3000)
+    end)
+    return ok and result.code == 0 and (result.stdout or ''):find(('","%d",'):format(pid), 1, true) ~= nil
+  end
+  return vim.uv.kill(pid, 0) == 0
+end
+
+---Find a live, non-RPC pi process (a terminal session) that owns
+---`session_path`, reading the presence files directly so it works even when
+---the sidebar's cache is empty. Conductor's own RPC instances (`mode = 'rpc'`)
+---are skipped; presence files from older extensions (no `mode`) count as
+---terminal sessions.
+---@param session_path string|nil
+---@return { pid: integer, bridge: string|nil, mode: string|nil }|nil
+function M.find_live(session_path)
+  local supervisor = require 'conductor.supervisor'
+  local key = supervisor.session_key(session_path)
+  if not key then
+    return nil
+  end
+  local candidates = read_candidates()
+  for _, candidate in ipairs(candidates) do
+    local decoded = candidate.decoded
+    if supervisor.session_key(nilable(decoded.sessionFile)) == key and nilable(decoded.mode) ~= 'rpc' and pid_alive(decoded.pid) then
+      return { pid = decoded.pid, bridge = nilable(decoded.bridge), mode = nilable(decoded.mode) }
+    end
+  end
+  return nil
 end
 
 ---Path to the bundled pi extension (for installation instructions).

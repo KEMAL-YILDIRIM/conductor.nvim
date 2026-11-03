@@ -47,6 +47,12 @@ local function translate(decoded, emit, pending)
     elseif decoded.success == false then
       emit { type = 'error', message = ('%s failed: %s'):format(decoded.command or '?', decoded.error or 'unknown error') }
     end
+  elseif kind == 'user_message' then
+    -- Only the conductor-presence bridge sends this (a prompt typed in the
+    -- terminal or sent by us); pi's RPC mode never does.
+    if type(decoded.text) == 'string' and decoded.text ~= '' then
+      emit { type = 'user_message', text = decoded.text }
+    end
   elseif kind == 'agent_start' then
     emit { type = 'agent_start' }
   elseif kind == 'agent_end' then
@@ -106,6 +112,10 @@ local function translate(decoded, emit, pending)
     emit { type = 'notify', message = ('extension error: %s'):format(decoded.error or '?'), level = 'error' }
   end
 end
+
+---Shared with the conductor-presence bridge transport (pi_bridge.lua), whose
+---wire format mirrors pi's RPC stream.
+M.translate = translate
 
 ---On Windows, a `.cmd`/`.bat` shim (npm/managed installs ship `pi.cmd`) can't
 ---be launched directly when any argument contains a space: cmd.exe strips the
