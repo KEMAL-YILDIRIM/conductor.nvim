@@ -1,5 +1,5 @@
 # Codebase Map
-_Last updated: 2026-10-27_
+_Last updated: 2026-11-03_
 
 ## Architecture Overview
 
@@ -86,6 +86,14 @@ the browser and jumps/scrolls to the line.
   input through the adapter's
   `dispatch_input` before `prompt()`; `append`/`note`/`reset_log` helpers let
   commands write into the chat log.
+- `persist.lua` — remembers the live sessions list across Neovim restarts in
+  `stdpath('data')/conductor/live_sessions.json`. Saved on every
+  `supervisor` broadcast (written only when the list changes), merged with
+  entries owned by other running Neovims (owner = pid + `v:servername`,
+  liveness probed by connecting to the server pipe). `restore()` (scheduled
+  from `setup`) recreates sessions as `idle` instances with no process; the
+  first prompt restarts the agent. `claimed_by()` refuses opening a session
+  another running Neovim holds (spawn, restart, terminal resume).
 - `ui_dialog.lua` — presents blocking agent `ui_request` dialogs via
   `vim.ui.select`/`vim.ui.input` and sends the response back.
 - `help.lua` — floating keybinding cheatsheet (`g?`), rendered from buffer-local

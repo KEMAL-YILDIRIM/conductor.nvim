@@ -23,6 +23,10 @@ local defaults = {
   sidebar = {
     ---Sidebar width in columns.
     width = 36,
+    ---Remember the live sessions list across Neovim restarts. Restored
+    ---sessions start stopped (idle); the first prompt restarts the agent. A
+    ---session can only be open in one running Neovim at a time.
+    persist = true,
   },
   browser = {
     ---Session-list panel width in columns.

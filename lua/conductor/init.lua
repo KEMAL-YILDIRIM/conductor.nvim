@@ -58,6 +58,15 @@ function M.setup(opts)
     end,
     desc = 'Conductor: manage AI agent sessions',
   })
+
+  -- Bring back the live sessions list from the last run (deferred so startup
+  -- is not held up by the file read and history parses).
+  vim.schedule(function()
+    local ok, restore_error = pcall(require('conductor.persist').restore)
+    if not ok then
+      vim.notify('conductor: could not restore live sessions: ' .. tostring(restore_error), vim.log.levels.WARN)
+    end
+  end)
 end
 
 ---Open the session picker (backend configurable: telescope or fzf-lua).
@@ -69,6 +78,13 @@ end
 ---Resume a session in a terminal (always opened in its own tab).
 ---@param session ConductorSession
 function M.resume(session)
+  local persist = require 'conductor.persist'
+  local owner = persist.claimed_by(session.path)
+  if owner then
+    vim.notify('conductor: ' .. persist.claimed_message(owner), vim.log.levels.WARN)
+    return
+  end
+
   local adapter = interface.get(session.adapter)
   local argv = adapter.resume_cmd(session)
   local terminal_options = config.options.terminal

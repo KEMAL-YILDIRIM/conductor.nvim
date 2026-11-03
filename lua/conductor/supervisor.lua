@@ -37,6 +37,12 @@ M.instances = {}
 local next_id = 0
 
 local function broadcast()
+  -- Persist the live list first (no-op unless a session path/name changed),
+  -- so a reboot or crash can restore it.
+  local ok, persist_error = pcall(require('conductor.persist').save, M.list())
+  if not ok then
+    vim.notify_once('conductor: could not save live sessions: ' .. tostring(persist_error), vim.log.levels.WARN)
+  end
   vim.api.nvim_exec_autocmds('User', { pattern = 'ConductorUpdate', modeline = false })
 end
 
@@ -141,21 +147,14 @@ local function start_process(instance, adapter, opts)
   return handle, spawn_error
 end
 
----Spawn a new managed instance.
----@param opts { adapter?: string, cwd?: string, session_path?: string, name?: string, ephemeral?: boolean }
----@return ConductorInstance|nil instance, string|nil error
-function M.spawn(opts)
-  opts = opts or {}
-  local interface = require 'conductor.adapters.interface'
-  local adapter_name = opts.adapter or require('conductor.config').options.default_adapter
-  local adapter = interface.get(adapter_name)
-  if not adapter.spawn then
-    return nil, ('adapter %q does not support managed instances'):format(adapter_name)
-  end
-
+---Build a fresh instance record (not yet registered, no process).
+---@param adapter_name string
+---@param opts { cwd?: string, session_path?: string, name?: string }
+---@return ConductorInstance
+local function new_instance(adapter_name, opts)
   next_id = next_id + 1
   ---@type ConductorInstance
-  local instance = {
+  return {
     id = next_id,
     name = opts.name or ('%s #%d'):format(adapter_name, next_id),
     adapter = adapter_name,
@@ -170,6 +169,27 @@ function M.spawn(opts)
     exit_code = nil,
     info = {},
   }
+end
+
+---Spawn a new managed instance.
+---@param opts { adapter?: string, cwd?: string, session_path?: string, name?: string, ephemeral?: boolean }
+---@return ConductorInstance|nil instance, string|nil error
+function M.spawn(opts)
+  opts = opts or {}
+  local interface = require 'conductor.adapters.interface'
+  local adapter_name = opts.adapter or require('conductor.config').options.default_adapter
+  local adapter = interface.get(adapter_name)
+  if not adapter.spawn then
+    return nil, ('adapter %q does not support managed instances'):format(adapter_name)
+  end
+  -- One session, one Neovim: refuse a session another running Neovim holds.
+  local persist = require 'conductor.persist'
+  local owner = persist.claimed_by(opts.session_path)
+  if owner then
+    return nil, persist.claimed_message(owner)
+  end
+
+  local instance = new_instance(adapter_name, opts)
 
   local handle, spawn_error = start_process(instance, adapter, opts)
   if not handle then
@@ -213,6 +233,12 @@ function M.restart(instance)
   local adapter = require('conductor.adapters.interface').get(instance.adapter)
   if not adapter.spawn then
     vim.notify(('conductor: adapter %q does not support managed instances'):format(instance.adapter), vim.log.levels.ERROR)
+    return false
+  end
+  local persist = require 'conductor.persist'
+  local owner = persist.claimed_by(instance.session_path)
+  if owner then
+    vim.notify('conductor: ' .. persist.claimed_message(owner), vim.log.levels.WARN)
     return false
   end
 
@@ -275,6 +301,19 @@ function M.session_key(path)
     key = key:lower()
   end
   return key
+end
+
+---Recreate a persisted session as a stopped instance (no agent process). Its
+---history is loaded from the session file; the first prompt restarts the agent.
+---@param entry { adapter: string, cwd?: string, session_path: string, name?: string }
+---@return ConductorInstance
+function M.restore(entry)
+  local instance = new_instance(entry.adapter, entry)
+  instance.status = 'idle'
+  M.instances[instance.id] = instance
+  broadcast()
+  M.load_history(instance)
+  return instance
 end
 
 ---Find a managed instance bound to `session_path`, if any.
