@@ -31,6 +31,9 @@ local M = {}
 ---@field branch_count integer number of conversation tips (1 = linear session)
 ---@field leaves ConductorBranchLeaf[]|nil branch tips, newest first (present when branch_count > 1)
 ---@field forked boolean|nil cheap listing-time flag: session has >1 branch tip
+---@field model string|nil latest model on the active branch ('provider/id')
+---@field thinking string|nil latest thinking level on the active branch
+---@field context_tokens number|nil last assistant reply's total tokens (nil after a compaction)
 
 ---Extract plain text from a message content field (string or content-block array).
 ---Skips thinking blocks, tool calls, and image data.
@@ -265,6 +268,14 @@ function M.parse(path, opts)
           meta.created = entry.timestamp
         elseif entry.type == 'session_info' and entry.name then
           meta.name = entry.name
+        elseif entry.type == 'model_change' and (on_path[entry.id] or #leaves == 0) then
+          if type(entry.provider) == 'string' and type(entry.modelId) == 'string' then
+            meta.model = entry.provider .. '/' .. entry.modelId
+          end
+        elseif entry.type == 'thinking_level_change' and (on_path[entry.id] or #leaves == 0) then
+          if type(entry.thinkingLevel) == 'string' then
+            meta.thinking = entry.thinkingLevel
+          end
         elseif entry.type == 'message' and type(entry.message) == 'table' and (on_path[entry.id] or #leaves == 0) then
           local message = entry.message
           if message.role == 'user' then
@@ -282,6 +293,14 @@ function M.parse(path, opts)
             if text ~= '' then
               meta.message_count = meta.message_count + 1
               entries[#entries + 1] = { role = 'assistant', text = text, timestamp = entry.timestamp }
+            end
+            -- Session details for a stopped (restored) instance: the reply's
+            -- own model is a fallback when no model_change entry exists.
+            if not meta.model and type(message.provider) == 'string' and type(message.model) == 'string' then
+              meta.model = message.provider .. '/' .. message.model
+            end
+            if type(message.usage) == 'table' and tonumber(message.usage.totalTokens) then
+              meta.context_tokens = tonumber(message.usage.totalTokens)
             end
             -- Tool calls become collapsible entries; output attaches on toolResult.
             if type(message.content) == 'table' then
@@ -309,6 +328,7 @@ function M.parse(path, opts)
             end
           end
         elseif entry.type == 'compaction' and entry.summary then
+          meta.context_tokens = nil -- unknown until the next reply
           entries[#entries + 1] = { role = 'system', text = '[compaction]\n' .. entry.summary, timestamp = entry.timestamp }
         end
     end

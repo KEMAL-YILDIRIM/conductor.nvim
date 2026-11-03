@@ -53,8 +53,11 @@ end
 local function context_text(context)
   if context == nil then
     return '…'
-  elseif context == false or not context.window then
+  elseif context == false then
     return '—'
+  elseif not context.window then
+    -- Seeded from the session file (no window size) until pi reports it.
+    return context.tokens and short_count(context.tokens) or '—'
   elseif not context.tokens then
     -- Unknown right after a compaction until the next turn.
     return ('? / %s'):format(short_count(context.window))

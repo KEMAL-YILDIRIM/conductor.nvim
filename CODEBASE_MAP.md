@@ -71,7 +71,11 @@ the browser and jumps/scrolls to the line.
   status) for the input window, read from `b:conductor_instance_id` →
   `instance.info`. `render()` backs a plain `%{%...%}` statusline;
   `lua/lualine/extensions/conductor_input.lua` exposes the same text to
-  lualine (which otherwise overwrites window-local statuslines).
+  lualine (which otherwise overwrites window-local statuslines). A restored
+  (stopped) instance has no process to ask, so `supervisor.load_history`
+  seeds still-empty fields from `log_parser.parse` meta (`model`, `thinking`,
+  `context_tokens`; the file has no window size, so context shows tokens only
+  until pi reports it). Live `refresh_info` replies overwrite them.
 - `completion.lua` — `/` command completion for the input bar: registers the
   `conductor.blink` source with blink.cmp at runtime (and restricts the
   `conductor_input` filetype to it unless the user configured that filetype),

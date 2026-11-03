@@ -565,6 +565,37 @@ end
 ---replaced, provided nothing streamed in while the file was being parsed.
 ---@param instance ConductorInstance
 ---@param opts { force?: boolean }|nil
+---Fill still-empty details (model, thinking level, context tokens) from the
+---parsed session file, so a stopped (restored) instance shows them before its
+---agent runs. Live `refresh_info` replies overwrite these; fields already set
+---are left alone. The file has no context window size, so context carries
+---tokens only until pi reports the window.
+---@param instance ConductorInstance
+---@param meta ConductorSessionMeta|nil
+local function seed_info(instance, meta)
+  if type(meta) ~= 'table' then
+    return
+  end
+  instance.info = instance.info or {}
+  local info = instance.info
+  local changed = false
+  if info.model == nil then
+    info.model = meta.model or false
+    changed = true
+  end
+  if info.thinking == nil then
+    info.thinking = meta.thinking or false
+    changed = true
+  end
+  if info.context == nil then
+    info.context = meta.context_tokens and { tokens = meta.context_tokens } or false
+    changed = true
+  end
+  if changed then
+    broadcast()
+  end
+end
+
 function M.load_history(instance, opts)
   local force = opts and opts.force
   if not instance.session_path or (#instance.log > 0 and not force) then
@@ -579,6 +610,7 @@ function M.load_history(instance, opts)
       return
     end
     refresh_name(instance, meta)
+    seed_info(instance, meta)
     if force then
       -- Skip if a new turn started or events arrived during the parse; the
       -- next agent_end resyncs again.
