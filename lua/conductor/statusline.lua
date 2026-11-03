@@ -60,7 +60,7 @@ local function context_text(context)
     return ('? / %s'):format(short_count(context.window))
   end
   local percent = context.percent or (context.tokens / context.window * 100)
-  return ('%s / %s (%d%%)'):format(short_count(context.tokens), short_count(context.window), math.floor(percent + 0.5))
+  return ('%d%% · %s / %s'):format(math.floor(percent + 0.5), short_count(context.tokens), short_count(context.window))
 end
 
 ---Escape `%` so text is shown literally inside a statusline format string.
@@ -110,7 +110,7 @@ function M.details(bufnr)
   }
 end
 
----Plain-text details, e.g. 'model claude-opus · thinking high · context 60k / 200k (30%)'.
+---Plain-text details, e.g. 'model claude-opus · thinking high · context 30% · 60k / 200k'.
 ---Not statusline-escaped.
 ---@param bufnr integer|nil
 ---@return string
@@ -120,14 +120,6 @@ function M.details_text(bufnr)
     parts[#parts + 1] = detail.label .. ' ' .. detail.value
   end
   return table.concat(parts, ' · ')
-end
-
----Session name of the buffer's instance ('' when none). Not escaped.
----@param bufnr integer|nil
----@return string
-function M.name(bufnr)
-  local instance = M.instance_for(bufnr)
-  return instance and instance.name or ''
 end
 
 ---Status label of the buffer's instance ('' when none). Not escaped.
@@ -151,7 +143,7 @@ function M.render()
   for _, detail in ipairs(M.details(bufnr)) do
     parts[#parts + 1] = ('%%#Comment#%s%%* %s'):format(detail.label, escape(detail.value))
   end
-  return (' %s  %s%%=%s '):format(escape(instance.name), table.concat(parts, ' %#Comment#·%* '), escape(M.status_label(instance)))
+  return (' %s%%=%s '):format(table.concat(parts, ' %#Comment#·%* '), escape(M.status_label(instance)))
 end
 
 ---Window-local `statusline` value for the chat input window.
