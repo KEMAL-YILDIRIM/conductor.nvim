@@ -119,22 +119,37 @@ function M.render()
   end
   local previous_selected = state.selected_key
 
-  -- Dedupe: a session that has been attached as a managed instance must not
-  -- also appear in the External section. A session lives on the panel once.
-  local managed_session_paths = {}
+  -- Dedupe: a session lives on the panel once. A running managed instance
+  -- (one with an agent process) wins over the External row for the same
+  -- session file. A stopped one (e.g. restored on startup, `handle == nil`)
+  -- must not hide a live terminal pi: show the External row and hide the
+  -- stopped placeholder instead.
+  local running_session_paths = {}
   for _, instance in ipairs(instances) do
     local key = supervisor.session_key(instance.session_path)
-    if key then
-      managed_session_paths[key] = true
+    if key and instance.handle then
+      running_session_paths[key] = true
     end
   end
   local externals = {}
+  local external_session_paths = {}
   for _, external in ipairs(all_externals) do
     local key = supervisor.session_key(external.session_file)
-    if not (key and managed_session_paths[key]) then
+    if not (key and running_session_paths[key]) then
       externals[#externals + 1] = external
+      if key then
+        external_session_paths[key] = true
+      end
     end
   end
+  local visible_instances = {}
+  for _, instance in ipairs(instances) do
+    local key = supervisor.session_key(instance.session_path)
+    if instance.handle or not (key and external_session_paths[key]) then
+      visible_instances[#visible_instances + 1] = instance
+    end
+  end
+  instances = visible_instances
 
   -- Selection follows the cursor; fall back to the previous selection, then
   -- to the first session when the selected one has gone away.
