@@ -28,25 +28,35 @@ local function presence_dir()
 end
 
 ---Read and decode all presence files. Cheap, synchronous (small JSON files).
----@return { file: string, decoded: table }[] candidates, integer[] pids
+---A file caught mid-write (empty or partial JSON) is reported in `unreadable`
+---by the pid in its filename, so callers can keep its last-known entry
+---instead of dropping the session for one refresh.
+---@return { file: string, decoded: table }[] candidates, integer[] pids, table<integer, boolean> unreadable
 local function read_candidates()
   local files = vim.fn.glob(presence_dir() .. '/*.json', true, true)
   ---@type { file: string, decoded: table }[]
   local candidates = {}
   local pids = {}
+  local unreadable = {}
   for _, file in ipairs(files) do
     local handle = io.open(file, 'r')
+    local ok, decoded = false, nil
     if handle then
       local content = handle:read '*a'
       handle:close()
-      local ok, decoded = pcall(vim.json.decode, content)
-      if ok and type(decoded) == 'table' and type(decoded.pid) == 'number' then
-        candidates[#candidates + 1] = { file = file, decoded = decoded }
-        pids[#pids + 1] = decoded.pid
+      ok, decoded = pcall(vim.json.decode, content)
+    end
+    if ok and type(decoded) == 'table' and type(decoded.pid) == 'number' then
+      candidates[#candidates + 1] = { file = file, decoded = decoded }
+      pids[#pids + 1] = decoded.pid
+    else
+      local file_pid = tonumber(vim.fn.fnamemodify(file, ':t:r'))
+      if file_pid then
+        unreadable[file_pid] = true
       end
     end
   end
-  return candidates, pids
+  return candidates, pids, unreadable
 end
 
 ---Cache of derived display names keyed by session file, invalidated by mtime.
@@ -141,10 +151,30 @@ function M.refresh_async(opts)
   end
   cache.refreshing = true
 
-  local candidates, pids = read_candidates()
+  local candidates, pids, unreadable = read_candidates()
 
+  ---@param alive table<integer, boolean>|nil nil = liveness probe failed
   local function finish(alive)
-    cache.sessions = build_sessions(candidates, alive)
+    if alive then
+      local sessions = build_sessions(candidates, alive)
+      -- Keep the last-known entry for a file caught mid-write.
+      if next(unreadable) then
+        local listed = {}
+        for _, session in ipairs(sessions) do
+          listed[session.pid] = true
+        end
+        for _, previous in ipairs(cache.sessions) do
+          if unreadable[previous.pid] and not listed[previous.pid] then
+            sessions[#sessions + 1] = previous
+          end
+        end
+        table.sort(sessions, function(a, b)
+          return a.pid < b.pid
+        end)
+      end
+      cache.sessions = sessions
+    end
+    -- Probe failed: keep the previous list and delete nothing.
     cache.at = vim.uv.now()
     cache.refreshing = false
     if opts.on_done then
@@ -159,21 +189,31 @@ function M.refresh_async(opts)
 
   if vim.fn.has 'win32' == 1 then
     -- Single async tasklist call for all pids; never blocks the main loop.
-    vim.system({ 'tasklist', '/NH', '/FO', 'CSV' }, { text = true }, function(result)
-      local alive = {}
+    -- The output is trusted only if it lists Neovim's own pid: a failed or
+    -- truncated tasklist must never be read as "every session died", or the
+    -- presence files of live sessions get deleted.
+    local own_pid = vim.uv.os_getpid()
+    local ok_spawn = pcall(vim.system, { 'tasklist', '/NH', '/FO', 'CSV' }, { text = true }, function(result)
+      local alive
       if result.code == 0 and result.stdout then
         local running = {}
         for pid_string in result.stdout:gmatch '","(%d+)",' do
           running[tonumber(pid_string)] = true
         end
-        for _, pid in ipairs(pids) do
-          alive[pid] = running[pid] == true
+        if running[own_pid] then
+          alive = {}
+          for _, pid in ipairs(pids) do
+            alive[pid] = running[pid] == true
+          end
         end
       end
       vim.schedule(function()
         finish(alive)
       end)
     end)
+    if not ok_spawn then
+      finish(nil)
+    end
   else
     -- POSIX: signal-0 probe is a cheap syscall, safe to run inline.
     local alive = {}

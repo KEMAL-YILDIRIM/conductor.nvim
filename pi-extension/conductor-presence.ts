@@ -27,7 +27,7 @@
  *
  * Install: copy this file to ~/.pi/agent/extensions/ (or `pi -e <path>`).
  */
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -102,9 +102,7 @@ export default function (pi: ExtensionAPI) {
 		}
 		try {
 			mkdirSync(presenceDir, { recursive: true });
-			writeFileSync(
-				presenceFile,
-				JSON.stringify({
+			const content = JSON.stringify({
 					pid: process.pid,
 					status,
 					mode: context.mode,
@@ -114,8 +112,19 @@ export default function (pi: ExtensionAPI) {
 					sessionName: context.sessionManager.getSessionName() ?? null,
 					cwd: context.cwd,
 					updatedAt: new Date().toISOString(),
-				}),
-			);
+				});
+			// Write to a temp file and rename it into place so readers never see
+			// a truncated file. The temp name ends in .tmp, not .json, so
+			// conductor's *.json glob ignores it.
+			const temporaryFile = `${presenceFile}.${process.pid}.tmp`;
+			try {
+				writeFileSync(temporaryFile, content);
+				renameSync(temporaryFile, presenceFile);
+			} catch {
+				// Rename can fail on Windows while a reader holds the file open.
+				rmSync(temporaryFile, { force: true });
+				writeFileSync(presenceFile, content);
+			}
 		} catch {
 			// Presence is best-effort; never break the agent over it.
 		}
@@ -457,9 +466,25 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	// Heartbeat: rewrite the presence file periodically so one that was removed
+	// (e.g. wrongly treated as stale) reappears without needing an agent event.
+	// unref() so the timer never keeps the process alive. Runs only between
+	// session_start and session_shutdown, so replaced instances don't linger.
+	let heartbeat: ReturnType<typeof setInterval> | undefined;
+	const stopHeartbeat = () => {
+		if (heartbeat) {
+			clearInterval(heartbeat);
+			heartbeat = undefined;
+		}
+	};
+
 	pi.on("session_start", async (_event, ctx) => {
 		context = ctx;
 		status = "idle";
+		if (!heartbeat) {
+			heartbeat = setInterval(() => write(), 15_000);
+			heartbeat.unref();
+		}
 		// Only a terminal pi gets a bridge; conductor's own RPC instances are
 		// already driven over stdin/stdout.
 		if (ctx.mode === "tui") {
@@ -538,12 +563,14 @@ export default function (pi: ExtensionAPI) {
 		if (event.reason !== "quit") {
 			broadcast({ type: "session_replaced" });
 		}
+		stopHeartbeat();
 		stopBridge();
 		context = undefined;
 		remove();
 	});
 
 	process.on("exit", () => {
+		stopHeartbeat();
 		stopBridge();
 		remove();
 	});
