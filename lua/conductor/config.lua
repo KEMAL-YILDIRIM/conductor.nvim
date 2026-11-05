@@ -124,7 +124,7 @@ local defaults = {
       send = '<CR>', ---Send the prompt.
       newline = '<S-CR>', ---Insert a literal newline (insert mode).
       focus_log = '<C-k>', ---Focus the log window.
-      abort = '<C-c>', ---Abort the running agent.
+      abort = '<C-c>', ---Abort the running agent (normal mode).
       close = 'q', ---Close the chat view (normal mode).
     },
     ---Keybinding cheatsheet, attached to every conductor buffer.

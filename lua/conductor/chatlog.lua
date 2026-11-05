@@ -296,11 +296,9 @@ function ensure_input_buf(instance)
       vim.api.nvim_set_current_win(shell.log_win)
     end
   end, vim.tbl_extend('force', options, { desc = 'Conductor: focus log' }))
-  config.map('input', 'abort', { 'n', 'i' }, function()
-    -- First press only closes an open completion menu.
-    if completion.close_if_open() then
-      return
-    end
+  -- Normal mode only: in insert mode <C-c> keeps its native Vim meaning
+  -- (leave insert mode) instead of aborting the agent by accident.
+  config.map('input', 'abort', 'n', function()
     require('conductor.supervisor').abort(instance)
   end, vim.tbl_extend('force', options, { desc = 'Conductor: stop agent' }))
   config.map('input', 'close', 'n', function()

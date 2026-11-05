@@ -186,8 +186,8 @@ Input bar mappings:                                      *conductor-input-keys*
     <CR>        Send the prompt / run the command (normal or insert mode).
                 With a completion menu open, accepts the selected item.
     <S-CR>      Insert a newline (insert mode)
-    <C-c>       Abort the running agent (first press only closes an open
-                completion menu)
+    <C-c>       Abort the running agent (normal mode; in insert mode it
+                keeps its native meaning and leaves insert mode)
     <C-k>       Focus the log window
     <C-x><C-o>  Complete `/` commands manually
     q           Close the chat view (normal mode)

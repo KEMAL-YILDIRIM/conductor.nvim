@@ -152,7 +152,7 @@ Input bar:
 |---|---|
 | `<CR>` | Send prompt / run command (normal or insert mode); accepts the item when a completion menu is open |
 | `<S-CR>` | Insert newline |
-| `<C-c>` | Stop (abort) the running agent; first press only closes an open completion menu |
+| `<C-c>` | Stop (abort) the running agent (normal mode; in insert mode it just leaves insert mode) |
 | `<C-k>` | Focus the log window |
 | `<C-x><C-o>` | Complete `/` commands manually |
 | `g?` | Toggle the keybinding cheatsheet |
