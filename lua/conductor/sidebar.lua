@@ -47,8 +47,8 @@ local function ensure_highlights()
     spec.default = true
     vim.api.nvim_set_hl(0, name, spec)
   end
-  define('ConductorLedRunning', { fg = '#4fa6ed' })
-  define('ConductorLedWaiting', { fg = '#8bcd5b' })
+  define('ConductorLedRunning', { fg = '#8bcd5b' })
+  define('ConductorLedWaiting', { fg = '#4fa6ed' })
   define('ConductorLedIdle', { fg = '#a0784e' })
   define('ConductorLedStarting', { fg = '#e5c07b' })
   define('ConductorLedError', { fg = '#e86671' })
