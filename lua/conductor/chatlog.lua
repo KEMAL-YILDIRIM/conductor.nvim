@@ -386,6 +386,10 @@ function M.open(instance, opts)
     config.map('chat', 'close', 'n', function()
       M.close(instance)
     end, vim.tbl_extend('force', options, { desc = 'Conductor: close chat' }))
+    config.map('chat', 'focus_sidebar', 'n', function()
+      -- Focuses the live sessions pane, reopening it if it was closed.
+      require('conductor.sidebar').open()
+    end, vim.tbl_extend('force', options, { desc = 'Conductor: focus sessions pane' }))
 
     require('conductor.help').attach(bufnr)
   end

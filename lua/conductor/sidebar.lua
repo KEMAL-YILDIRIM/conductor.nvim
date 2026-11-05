@@ -299,7 +299,7 @@ local function setup_keymaps()
   local config = require 'conductor.config'
   local options = { buffer = state.bufnr, nowait = true }
 
-  config.map('sidebar', 'open_chat', 'n', function()
+  local function open_chat_at_cursor()
     local instance = instance_at_cursor()
     if instance then
       require('conductor.chatlog').open(instance)
@@ -331,7 +331,10 @@ local function setup_keymaps()
         vim.notify('conductor: ' .. (spawn_error or 'attach failed'), vim.log.levels.ERROR)
       end
     end
-  end, vim.tbl_extend('force', options, { desc = 'Conductor: open chat' }))
+  end
+
+  config.map('sidebar', 'open_chat', 'n', open_chat_at_cursor, vim.tbl_extend('force', options, { desc = 'Conductor: open chat' }))
+  config.map('sidebar', 'enter', 'n', open_chat_at_cursor, vim.tbl_extend('force', options, { desc = 'Conductor: enter session' }))
 
   config.map('sidebar', 'prompt', 'n', function()
     local instance = instance_at_cursor()

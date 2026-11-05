@@ -102,6 +102,7 @@ local defaults = {
     ---Live sessions sidebar (`:Conductor panel`).
     sidebar = {
       open_chat = '<CR>', ---Open the chat buffer for the instance under the cursor.
+      enter = 'l', ---Enter the session under the cursor (same as open_chat).
       prompt = 'p', ---Send a prompt without opening the chat.
       new = 'n', ---Create a new session.
       stop = 's', ---Stop the running agent.
@@ -118,6 +119,7 @@ local defaults = {
       prev_tool = '[t', ---Jump to the previous tool call.
       abort = '<C-c>', ---Abort the running agent.
       close = 'q', ---Close the chat view.
+      focus_sidebar = 'h', ---Jump back to the live sessions pane.
     },
     ---Chat input bar (normal + insert mode).
     input = {
