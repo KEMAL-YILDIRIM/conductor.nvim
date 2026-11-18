@@ -95,6 +95,18 @@ check(cursor_line == ' ● other', 'sidebar cursor moves to the loaded session')
 check(vim.api.nvim_get_current_win() ~= sidebar_win, 'focus stays in the chat')
 local highlight = vim.api.nvim_get_hl(0, { name = 'ConductorSidebarActive' })
 check(not highlight.bold, 'highlight is not bold')
+check(highlight.fg == nil, 'row highlight has no text colour (keeps the status light colour)')
+local led_group
+do
+  local buffer = vim.fn.bufnr 'conductor://sessions'
+  local active_line = vim.api.nvim_win_get_cursor(sidebar_win)[1] - 1
+  for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buffer, -1, { active_line, 0 }, { active_line, -1 }, { details = true })) do
+    if mark[3] == 1 and mark[4].hl_group and mark[4].hl_group:match '^ConductorLed' then
+      led_group = mark[4].hl_group
+    end
+  end
+end
+check(led_group == 'ConductorLedIdle', 'status light on the loaded row keeps its status colour (got ' .. tostring(led_group) .. ')')
 require('conductor.chatlog').close(other)
 check(#active_rows() == 0, 'no highlight once the chat is closed')
 vim.api.nvim_set_current_win(sidebar_win)

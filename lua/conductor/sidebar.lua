@@ -70,8 +70,9 @@ local function ensure_highlights()
   define('ConductorSidebarSection', { link = 'Title' })
 
   -- Session shown in the chat: a teal wash blended into Normal's background
-  -- with a lighter (not bold) name, so it stays visible whatever the cursor
-  -- or focus is doing.
+  -- across the row (background only, so the status light keeps its colour)
+  -- plus a lighter (not bold) name, visible whatever the cursor or focus is
+  -- doing.
   local normal = vim.api.nvim_get_hl(0, { name = 'Normal', link = false })
   local function split(color)
     return math.floor(color / 0x10000) % 0x100, math.floor(color / 0x100) % 0x100, color % 0x100
@@ -91,12 +92,13 @@ local function ensure_highlights()
     local red, green, blue = split(normal.bg)
     local dark = (0.299 * red + 0.587 * green + 0.114 * blue) < 128
     local foreground = type(normal.fg) == 'number' and normal.fg or (dark and 0xc8c8c8 or 0x383838)
-    define('ConductorSidebarActive', {
-      bg = blend(normal.bg, 0x2fb6c9, 0.24),
-      fg = blend(foreground, dark and 0xffffff or 0x000000, 0.6),
-    })
+    define('ConductorSidebarActive', { bg = blend(normal.bg, 0x2fb6c9, 0.24) })
+    define('ConductorSidebarActiveName', { fg = blend(foreground, dark and 0xffffff or 0x000000, 0.6) })
   else
-    define('ConductorSidebarActive', { link = 'Visual' })
+    -- No known background: borrow only Visual's background, never its text colour.
+    local visual = vim.api.nvim_get_hl(0, { name = 'Visual', link = false })
+    define('ConductorSidebarActive', { bg = visual.bg })
+    define('ConductorSidebarActiveName', {})
   end
 end
 
@@ -391,11 +393,18 @@ function M.render()
     vim.api.nvim_buf_set_extmark(state.bufnr, namespace, line, 0, { end_row = line, end_col = #lines[line + 1], hl_group = 'ConductorSidebarSection' })
   end
   for _, span in ipairs(spans) do
-    vim.api.nvim_buf_set_extmark(state.bufnr, namespace, span.line, span.start_col, { end_col = span.end_col, hl_group = span.group })
+    -- Above the active-row highlight so the status light keeps its colour.
+    vim.api.nvim_buf_set_extmark(state.bufnr, namespace, span.line, span.start_col, { end_col = span.end_col, hl_group = span.group, priority = 4200 })
   end
   for _, row in ipairs(state.rows) do
     if row.key == active_key then
       vim.api.nvim_buf_set_extmark(state.bufnr, namespace, row.first - 1, 0, { line_hl_group = 'ConductorSidebarActive' })
+      -- Lighter text on the name only (after ' ● '), never on the light.
+      local name_start = #(' ' .. led_icon .. ' ')
+      vim.api.nvim_buf_set_extmark(state.bufnr, namespace, row.first - 1, name_start, {
+        end_col = #lines[row.first],
+        hl_group = 'ConductorSidebarActiveName',
+      })
       break
     end
   end
