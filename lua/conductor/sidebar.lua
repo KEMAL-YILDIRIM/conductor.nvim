@@ -66,7 +66,6 @@ local function ensure_highlights()
   define('ConductorLedStarting', { fg = '#e5c07b' })
   define('ConductorLedError', { fg = '#e86671' })
   define('ConductorLedExited', { fg = '#5c6370' })
-  define('ConductorSidebarStatus', { link = 'Comment' })
   define('ConductorSidebarSection', { link = 'Title' })
 
   -- Session shown in the chat: a teal wash blended into Normal's background
