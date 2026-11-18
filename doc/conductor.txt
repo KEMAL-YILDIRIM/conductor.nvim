@@ -145,7 +145,10 @@ Opened with |:Conductor-panel|. Shows managed agent instances (and external
 ones, see |conductor-external|) with per-session status. When a session's
 folder is a git repository with changes, the status also shows the number of
 changed files (e.g. `idle · 4 files`). The count is computed in the
-background and refreshed every 15 seconds while the sidebar is open.
+background and refreshed every 15 seconds while the sidebar is open. When
+the session keeps a todo list (pi's `todo` tool, reported through the
+bundled presence extension), its progress is shown too (e.g.
+`running · 3/7 · 4 files`).
 
 Sidebar mappings:                                      *conductor-sidebar-keys*
 

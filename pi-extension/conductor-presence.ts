@@ -89,6 +89,30 @@ function messageText(content: unknown): string {
 export default function (pi: ExtensionAPI) {
 	let status: PresenceStatus = "idle";
 	let statusBeforePrompt: PresenceStatus | undefined;
+	// Progress of the todo extension's list, shown in Conductor's sidebar.
+	// Read from the `todo` tool results' details ({ todos: [{ done }] }), so this
+	// file does not depend on the todo extension's code.
+	let todo: { done: number; total: number } | null = null;
+	const todoFromDetails = (details: unknown): { done: number; total: number } | null | undefined => {
+		const todos = (details as { todos?: unknown } | undefined)?.todos;
+		if (!Array.isArray(todos)) return undefined;
+		if (todos.length === 0) return null;
+		return { done: todos.filter((item) => (item as { done?: unknown })?.done === true).length, total: todos.length };
+	};
+	const todoFromBranch = (ctx: ExtensionContext): { done: number; total: number } | null => {
+		let found: { done: number; total: number } | null = null;
+		try {
+			for (const entry of ctx.sessionManager.getBranch()) {
+				const message = (entry as { type?: string; message?: { role?: string; toolName?: string; details?: unknown } }).message;
+				if ((entry as { type?: string }).type !== "message" || message?.role !== "toolResult" || message.toolName !== "todo") continue;
+				const progress = todoFromDetails(message.details);
+				if (progress !== undefined) found = progress;
+			}
+		} catch {
+			// Best-effort, like the rest of presence.
+		}
+		return found;
+	};
 	let context: ExtensionContext | undefined;
 	let server: Server | undefined;
 	let serverPath: string | undefined;
@@ -111,6 +135,7 @@ export default function (pi: ExtensionAPI) {
 					sessionFile: context.sessionManager.getSessionFile() ?? null,
 					sessionName: context.sessionManager.getSessionName() ?? null,
 					cwd: context.cwd,
+					todo,
 					updatedAt: new Date().toISOString(),
 				});
 			// Write to a temp file and rename it into place so readers never see
@@ -481,6 +506,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		context = ctx;
 		status = "idle";
+		todo = todoFromBranch(ctx);
 		if (!heartbeat) {
 			heartbeat = setInterval(() => write(), 15_000);
 			heartbeat.unref();
@@ -490,6 +516,12 @@ export default function (pi: ExtensionAPI) {
 		if (ctx.mode === "tui") {
 			startBridge();
 		}
+		write();
+	});
+
+	pi.on("session_tree", async (_event, ctx) => {
+		context = ctx;
+		todo = todoFromBranch(ctx);
 		write();
 	});
 
@@ -531,6 +563,13 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("tool_execution_end", async (event) => {
+		if (event.toolName === "todo") {
+			const progress = todoFromDetails((event.result as { details?: unknown } | undefined)?.details);
+			if (progress !== undefined) {
+				todo = progress;
+				write();
+			}
+		}
 		broadcast({ type: "tool_execution_end", toolName: event.toolName, result: event.result, isError: event.isError });
 	});
 

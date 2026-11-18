@@ -124,6 +124,16 @@ function M.render()
   -- session file. A stopped one (e.g. restored on startup, `handle == nil`)
   -- must not hide a live terminal pi: show the External row and hide the
   -- stopped placeholder instead.
+  -- Todo progress by session file, from every presence file (Conductor's own
+  -- RPC instances write one too), before duplicates are hidden below.
+  local todo_by_session = {}
+  for _, external in ipairs(all_externals) do
+    local key = supervisor.session_key(external.session_file)
+    if key and external.todo then
+      todo_by_session[key] = external.todo
+    end
+  end
+
   local running_session_paths = {}
   for _, instance in ipairs(instances) do
     local key = supervisor.session_key(instance.session_path)
@@ -212,6 +222,16 @@ function M.render()
     return ''
   end
 
+  ---' · 3/7' when the session has a todo list (see the todo Pi extension).
+  ---@param todo { done: integer, total: integer }|nil
+  ---@return string
+  local function todo_suffix(todo)
+    if todo then
+      return (' · %d/%d'):format(todo.done, todo.total)
+    end
+    return ''
+  end
+
   if #instances == 0 and #externals == 0 then
     lines[#lines + 1] = '  no live sessions'
     lines[#lines + 1] = ''
@@ -224,7 +244,9 @@ function M.render()
       for _, instance in ipairs(instances) do
         ---@type ConductorSidebarRow
         local row = { key = 'i:' .. instance.id, instance_id = instance.id, first = 0 }
-        add_header(row, instance.name, instance.status, require('conductor.statusline').status_label(instance) .. change_suffix(instance.cwd))
+        add_header(row, instance.name, instance.status, require('conductor.statusline').status_label(instance)
+          .. todo_suffix(todo_by_session[supervisor.session_key(instance.session_path) or ''])
+          .. change_suffix(instance.cwd))
         state.rows[#state.rows + 1] = row
       end
     end
@@ -237,7 +259,9 @@ function M.render()
       for _, external in ipairs(externals) do
         ---@type ConductorSidebarRow
         local row = { key = 'e:' .. external.pid, external = external, first = 0 }
-        local label = ('%s · pid %d'):format(status_labels[external.status] or external.status, external.pid) .. change_suffix(external.cwd)
+        local label = ('%s · pid %d'):format(status_labels[external.status] or external.status, external.pid)
+          .. todo_suffix(external.todo)
+          .. change_suffix(external.cwd)
         add_header(row, external.name, external.status, label)
         state.rows[#state.rows + 1] = row
       end

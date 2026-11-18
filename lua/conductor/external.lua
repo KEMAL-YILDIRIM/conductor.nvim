@@ -12,6 +12,7 @@ local M = {}
 ---@field updated_at string|nil
 ---@field bridge string|nil pipe of the conductor-presence bridge (live attach)
 ---@field mode string|nil pi run mode ('tui', 'rpc', ...); nil for old extensions
+---@field todo { done: integer, total: integer }|nil todo list progress; nil when there is no list
 
 ---vim.json.decode maps JSON null to vim.NIL, which is truthy in Lua. Coerce
 ---it to nil so `or` fallbacks work as intended.
@@ -97,6 +98,16 @@ local function session_display_name(session_file, pid)
   return name
 end
 
+---Todo progress from a presence file's `todo` field, or nil when absent or malformed.
+---@param value any
+---@return { done: integer, total: integer }|nil
+local function todo_progress(value)
+  if type(value) ~= 'table' or type(value.done) ~= 'number' or type(value.total) ~= 'number' or value.total < 1 then
+    return nil
+  end
+  return { done = value.done, total = value.total }
+end
+
 ---Build the session list from candidates + a liveness map, pruning dead ones.
 ---@param candidates { file: string, decoded: table }[]
 ---@param alive table<integer, boolean>
@@ -117,6 +128,7 @@ local function build_sessions(candidates, alive)
         updated_at = nilable(decoded.updatedAt),
         bridge = nilable(decoded.bridge),
         mode = nilable(decoded.mode),
+        todo = todo_progress(decoded.todo),
       }
     else
       -- Stale presence file from a crashed/killed process.
