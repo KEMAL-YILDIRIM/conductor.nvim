@@ -263,6 +263,7 @@ require('conductor').setup {
     },
     sidebar = {
       open_chat = '<CR>', prompt = 'p', new = 'n', stop = 's', kill = 'x', close = 'q',
+      review = 'd', edit_changes = 'e',
     },
     chat = {
       focus_input = 'i', toggle_tool = '<CR>', next_tool = ']t', prev_tool = '[t',

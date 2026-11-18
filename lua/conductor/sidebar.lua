@@ -196,6 +196,22 @@ function M.render()
     status_marks[#status_marks + 1] = { line = #lines - 1, text = label }
   end
 
+  ---' · N files' when the session's folder has changes, computed in the
+  ---background (see conductor.review); re-renders once a count changes.
+  ---@param cwd string|nil
+  ---@return string
+  local function change_suffix(cwd)
+    local count = require('conductor.review').cached_count(cwd, function()
+      if buffer_valid() then
+        M.render()
+      end
+    end)
+    if count and count > 0 then
+      return (' · %d %s'):format(count, count == 1 and 'file' or 'files')
+    end
+    return ''
+  end
+
   if #instances == 0 and #externals == 0 then
     lines[#lines + 1] = '  no live sessions'
     lines[#lines + 1] = ''
@@ -208,7 +224,7 @@ function M.render()
       for _, instance in ipairs(instances) do
         ---@type ConductorSidebarRow
         local row = { key = 'i:' .. instance.id, instance_id = instance.id, first = 0 }
-        add_header(row, instance.name, instance.status, require('conductor.statusline').status_label(instance))
+        add_header(row, instance.name, instance.status, require('conductor.statusline').status_label(instance) .. change_suffix(instance.cwd))
         state.rows[#state.rows + 1] = row
       end
     end
@@ -221,7 +237,7 @@ function M.render()
       for _, external in ipairs(externals) do
         ---@type ConductorSidebarRow
         local row = { key = 'e:' .. external.pid, external = external, first = 0 }
-        local label = ('%s · pid %d'):format(status_labels[external.status] or external.status, external.pid)
+        local label = ('%s · pid %d'):format(status_labels[external.status] or external.status, external.pid) .. change_suffix(external.cwd)
         add_header(row, external.name, external.status, label)
         state.rows[#state.rows + 1] = row
       end
@@ -229,6 +245,7 @@ function M.render()
     lines[#lines + 1] = ''
     lines[#lines + 1] = ' <CR>: open chat  n: new'
     lines[#lines + 1] = ' p: prompt  s: stop  x: kill  q: close'
+    lines[#lines + 1] = ' d: review diff  e: edit changes'
   end
 
   for _, row in ipairs(state.rows) do
@@ -386,6 +403,34 @@ local function setup_keymaps()
       require('conductor.supervisor').remove(instance)
     end
   end, vim.tbl_extend('force', options, { desc = 'Conductor: kill instance' }))
+
+  ---Folder and name of the session under the cursor (managed or external).
+  ---@return string|nil cwd, string|nil name
+  local function session_folder_at_cursor()
+    local instance = instance_at_cursor()
+    if instance then
+      return instance.cwd, instance.name
+    end
+    local row = row_at_cursor()
+    if row and row.external then
+      return row.external.cwd, row.external.name
+    end
+    return nil, nil
+  end
+
+  config.map('sidebar', 'review', 'n', function()
+    local cwd = session_folder_at_cursor()
+    if cwd then
+      require('conductor.review').diff(cwd)
+    end
+  end, vim.tbl_extend('force', options, { desc = 'Conductor: review changes in diffview' }))
+
+  config.map('sidebar', 'edit_changes', 'n', function()
+    local cwd, name = session_folder_at_cursor()
+    if cwd then
+      require('conductor.review').edit(cwd, name)
+    end
+  end, vim.tbl_extend('force', options, { desc = 'Conductor: edit changed files in a new tab' }))
 
   config.map('sidebar', 'next_session', 'n', function()
     jump(1)
