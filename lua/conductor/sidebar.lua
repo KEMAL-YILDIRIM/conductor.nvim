@@ -23,6 +23,8 @@ local state = {
   line_to_row = {}, ---@type table<integer, ConductorSidebarRow>
   ---Key of the selected row (follows the cursor).
   selected_key = nil, ---@type string|nil
+  ---Key of the row whose session is shown in the chat (highlighted).
+  active_key = nil, ---@type string|nil
   autocmd_id = nil, ---@type integer|nil
   resize_autocmd_id = nil, ---@type integer|nil
   refresh_timer = nil, ---@type uv.uv_timer_t|nil
@@ -66,6 +68,36 @@ local function ensure_highlights()
   define('ConductorLedExited', { fg = '#5c6370' })
   define('ConductorSidebarStatus', { link = 'Comment' })
   define('ConductorSidebarSection', { link = 'Title' })
+
+  -- Session shown in the chat: a teal wash blended into Normal's background
+  -- with a lighter (not bold) name, so it stays visible whatever the cursor
+  -- or focus is doing.
+  local normal = vim.api.nvim_get_hl(0, { name = 'Normal', link = false })
+  local function split(color)
+    return math.floor(color / 0x10000) % 0x100, math.floor(color / 0x100) % 0x100, color % 0x100
+  end
+  local function clamp(value)
+    return math.max(0, math.min(255, math.floor(value + 0.5)))
+  end
+  ---Blend `accent` into `base` by `alpha` (0..1 = accent weight).
+  local function blend(base, accent, alpha)
+    local base_red, base_green, base_blue = split(base)
+    local accent_red, accent_green, accent_blue = split(accent)
+    return clamp(base_red + (accent_red - base_red) * alpha) * 0x10000
+      + clamp(base_green + (accent_green - base_green) * alpha) * 0x100
+      + clamp(base_blue + (accent_blue - base_blue) * alpha)
+  end
+  if type(normal.bg) == 'number' then
+    local red, green, blue = split(normal.bg)
+    local dark = (0.299 * red + 0.587 * green + 0.114 * blue) < 128
+    local foreground = type(normal.fg) == 'number' and normal.fg or (dark and 0xc8c8c8 or 0x383838)
+    define('ConductorSidebarActive', {
+      bg = blend(normal.bg, 0x2fb6c9, 0.24),
+      fg = blend(foreground, dark and 0xffffff or 0x000000, 0.6),
+    })
+  else
+    define('ConductorSidebarActive', { link = 'Visual' })
+  end
 end
 
 ensure_highlights()
@@ -117,6 +149,25 @@ local function close_details()
   end
   details.winid = nil
   details.line = nil
+end
+
+---Re-render and move the sidebar cursor onto the session the chat shows
+---(without focusing the sidebar). Called by the chat when it opens a session.
+function M.reveal()
+  if not (buffer_valid() and window_valid()) then
+    return
+  end
+  M.render()
+  for _, row in ipairs(state.rows) do
+    if row.key == state.active_key then
+      if vim.api.nvim_win_get_cursor(state.winid)[1] ~= row.first then
+        close_details()
+        vim.api.nvim_win_set_cursor(state.winid, { row.first, 0 })
+      end
+      state.selected_key = row.key
+      return
+    end
+  end
 end
 
 ---Shorten `text` to at most `max_width` display cells, ending in '…'.
@@ -200,6 +251,29 @@ function M.render()
     end
   end
   instances = visible_instances
+
+  -- The row whose session the chat is showing. A managed instance hidden in
+  -- favour of a live terminal row maps onto that External row instead.
+  local active_key
+  local current = require('conductor.chatlog').current_instance()
+  if current then
+    for _, instance in ipairs(instances) do
+      if instance.id == current.id then
+        active_key = 'i:' .. instance.id
+        break
+      end
+    end
+    local current_session = not active_key and supervisor.session_key(current.session_path)
+    if current_session then
+      for _, external in ipairs(externals) do
+        if supervisor.session_key(external.session_file) == current_session then
+          active_key = 'e:' .. external.pid
+          break
+        end
+      end
+    end
+  end
+  state.active_key = active_key
 
   -- Selection follows the cursor; fall back to the previous selection, then
   -- to the first session when the selected one has gone away.
@@ -318,6 +392,12 @@ function M.render()
   end
   for _, span in ipairs(spans) do
     vim.api.nvim_buf_set_extmark(state.bufnr, namespace, span.line, span.start_col, { end_col = span.end_col, hl_group = span.group })
+  end
+  for _, row in ipairs(state.rows) do
+    if row.key == active_key then
+      vim.api.nvim_buf_set_extmark(state.bufnr, namespace, row.first - 1, 0, { line_hl_group = 'ConductorSidebarActive' })
+      break
+    end
   end
 
   -- Put the cursor back on its session's row.

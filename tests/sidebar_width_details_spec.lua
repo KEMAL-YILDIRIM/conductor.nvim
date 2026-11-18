@@ -40,8 +40,10 @@ vim.fn.writefile({
 local supervisor = require 'conductor.supervisor'
 local instance = { id = 1, name = 'managed', status = 'idle', cwd = folder, session_path = session_path, handle = {}, log = {}, partial = '' }
 supervisor.instances[1] = instance
+local other = { id = 2, name = 'other', status = 'idle', cwd = folder, handle = {}, log = {}, partial = '' }
+supervisor.instances[2] = other
 supervisor.list = function()
-  return { instance }
+  return { instance, other }
 end
 local external = require 'conductor.external'
 external.list_cached = function()
@@ -70,6 +72,33 @@ check(vim.api.nvim_win_get_width(sidebar_win) == 40, 'sidebar back at 20% after 
 vim.o.columns = 250
 vim.api.nvim_exec_autocmds('VimResized', {})
 check(vim.api.nvim_win_get_width(sidebar_win) == 50, 'sidebar follows an editor resize (50 of 250)')
+
+-- The session shown in the chat is highlighted on the sidebar.
+local function active_rows()
+  local buffer = vim.fn.bufnr 'conductor://sessions'
+  local buffer_lines = vim.api.nvim_buf_get_lines(buffer, 0, -1, false)
+  local result = {}
+  for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buffer, -1, 0, -1, { details = true })) do
+    if mark[4].line_hl_group == 'ConductorSidebarActive' then
+      result[#result + 1] = buffer_lines[mark[2] + 1]
+    end
+  end
+  return result
+end
+local active = active_rows()
+check(#active == 1 and active[1] == ' ● managed', 'loaded session is highlighted (got ' .. vim.inspect(active) .. ')')
+require('conductor.chatlog').open(other)
+active = active_rows()
+check(#active == 1 and active[1] == ' ● other', 'highlight follows the chat to another session (got ' .. vim.inspect(active) .. ')')
+local cursor_line = vim.api.nvim_buf_get_lines(vim.fn.bufnr 'conductor://sessions', 0, -1, false)[vim.api.nvim_win_get_cursor(sidebar_win)[1]]
+check(cursor_line == ' ● other', 'sidebar cursor moves to the loaded session')
+check(vim.api.nvim_get_current_win() ~= sidebar_win, 'focus stays in the chat')
+local highlight = vim.api.nvim_get_hl(0, { name = 'ConductorSidebarActive' })
+check(not highlight.bold, 'highlight is not bold')
+require('conductor.chatlog').close(other)
+check(#active_rows() == 0, 'no highlight once the chat is closed')
+vim.api.nvim_set_current_win(sidebar_win)
+require('conductor.chatlog').open(instance)
 
 -- Shift+K on the session row.
 vim.api.nvim_set_current_win(sidebar_win)

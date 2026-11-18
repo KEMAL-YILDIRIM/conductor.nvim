@@ -328,6 +328,17 @@ function M.close(instance)
   shell.input_win = nil
   shell.log_win = nil
   shell.instance = nil
+  -- Drop the sidebar's highlight on the session that was shown.
+  require('conductor.sidebar').render()
+end
+
+---The instance shown in the chat window, or nil when the chat is closed.
+---@return ConductorInstance|nil
+function M.current_instance()
+  if window_valid(shell.log_win) then
+    return shell.instance
+  end
+  return nil
 end
 
 ---Focus the input bar in insert mode.
@@ -400,6 +411,7 @@ function M.open(instance, opts)
     display_in_shell(instance)
     vim.api.nvim_set_current_win(shell.log_win)
     M.refresh(instance)
+    require('conductor.sidebar').reveal()
     return
   end
 
@@ -448,6 +460,8 @@ function M.open(instance, opts)
   shell.instance = instance
   vim.api.nvim_set_current_win(shell.log_win)
   M.refresh(instance)
+  -- Highlight this session on the sidebar and move its cursor there.
+  require('conductor.sidebar').reveal()
 end
 
 ---Whether the given window is one of the shared chat shell windows (log or
