@@ -1,5 +1,5 @@
 # Codebase Map
-_Last updated: 2026-11-03_
+_Last updated: 2026-11-18_
 
 ## Architecture Overview
 
@@ -67,6 +67,11 @@ the browser and jumps/scrolls to the line.
   `conductor_input`, `syntax=markdown`). Refused input stays in the bar;
   `set_input()` refills it (used by `/fork`). The input window's
   `statusline` comes from `statusline.lua`, refreshed on `ConductorUpdate`.
+  `current_instance()` returns the instance shown in the (single, shared)
+  chat shell; `open` calls `sidebar.reveal()` and `close` re-renders the
+  sidebar so its active-row highlight follows the chat. When the chat is
+  split off a sidebar left alone on its tab, `open` calls
+  `sidebar.apply_width()` (the split would otherwise halve the sidebar).
 - `statusline.lua` — session details (model, thinking level, context usage,
   status) for the input window, read from `b:conductor_instance_id` →
   `instance.info`. `render()` backs a plain `%{%...%}` statusline;
@@ -83,11 +88,29 @@ the browser and jumps/scrolls to the line.
   `accept_if_open`/`close_if_open` so `<CR>`/`<C-c>`/`<C-k>` act on an open
   menu first.
 - `blink.lua` — the blink.cmp source (enabled only in `conductor_input`).
-- `sidebar.lua` — live sessions sidebar, one row per session with a
-  color-coded status light (`ConductorLed*` groups). Rows never expand —
-  session details live in the input window statusline. The cursor is pinned
-  to its session across re-renders and `j`/`k` jump between session rows. Push-updated via the
-  `User ConductorUpdate` autocmd (no polling).
+- `sidebar.lua` — live sessions sidebar. Rows show only the color-coded
+  status light (`ConductorLed*` groups) and the name (full width, `…` only
+  when too long). Width: `sidebar.width` is a fraction of the editor width
+  (default `0.2`, min 24 columns) or a column count, via `resolve_width()` /
+  `M.apply_width()`, re-applied on `VimResized`. `K` opens a details float
+  beside the row (status, pid for terminal sessions, todo progress, changed
+  files, full session file path, folder, full first prompt from
+  `log_parser.scan_meta(...).first_user_text`); `K` again focuses it, moving
+  off the row closes it. The session shown in the chat gets a
+  background-only `ConductorSidebarActive` line highlight plus
+  `ConductorSidebarActiveName` on the name; status-light extmarks use
+  priority 4200 so their colour always wins. `M.reveal()` moves the sidebar
+  cursor to that row without focusing it. `d`/`e` review/edit the session's
+  changes (`review.lua`), `l`/`<CR>` enter the chat, `j`/`k` jump between
+  session rows; the cursor is pinned to its session across re-renders.
+  Push-updated via the `User ConductorUpdate` autocmd; external sessions are
+  polled every 2 s while open.
+- `review.lua` — `diff(cwd)` reviews a session folder's changes in
+  diffview (a linked worktree compares against its merge-base with the main
+  branch; the main checkout against `HEAD`); `edit(cwd, name)` opens the
+  folder in a new tab with changed files in the quickfix list.
+  `cached_count(cwd, on_change)` returns a cached changed-file count (nil
+  while unknown) and refreshes it in the background.
 - `supervisor.lua` — owns managed instances, tracks status, broadcasts changes
   via `User ConductorUpdate`. `refresh_info()` fills `instance.info` through
   the adapter's optional `fetch_info` (after spawn/restart, every finished
@@ -115,6 +138,7 @@ the browser and jumps/scrolls to the line.
 
 ### Config
 - `config.lua` — defaults + `setup()`. Notable: `browser.width` (60 cols),
+  `sidebar.width` (`0.2` = 20% of the editor, or a column count),
   terminal backend options, `chat.slash_completion`.
 
 ## Data Flow
@@ -145,6 +169,10 @@ the browser and jumps/scrolls to the line.
   avoids "Keyboard interrupt" during buffer teardown on picker cancel.
 - **Editable-list mapping via concealed id token**: list lines carry a hidden
   `/NNN ` token so oil.nvim-style edits map back to sessions.
+- **Background-only line highlights**: a `line_hl_group` with a text colour
+  paints over inline spans (e.g. the sidebar's `●` status colour). Keep line
+  highlights background-only, put text colour on a separate span, and give
+  must-keep spans a higher extmark priority.
 - **Copy/move-proof timestamps from session data**: recency display and sort
   read `created`/`last_activity` from *inside* the session log (ISO-8601 UTC
   strings, comparable lexicographically), falling back to the file mtime only
@@ -152,6 +180,17 @@ the browser and jumps/scrolls to the line.
   (which resets mtime) no longer scrambles the displayed time or list order.
 
 ## Recent Changes
+- 2026-11-18 **Sidebar redesign**: width defaults to 20% of the editor
+  (fixes the sidebar growing to half the window after the chat was closed
+  and reopened — the reopen split a full-width sidebar). Rows show only the
+  status light and name; everything else (status, pid, todo, changes, paths,
+  full first prompt) moved into the `K` details float. The session shown in
+  the chat is highlighted (background + lighter name; the status light keeps
+  its colour). Removed the now-unused `ConductorSidebarStatus` group.
+  Headless specs in `tests/`.
+- 2026-11-18 **Review and todo progress**: `d`/`e` on a sidebar row review
+  or edit the session folder's changes (`review.lua`); todo progress comes
+  from the presence file's `todo` field (shown in the `K` float).
 - 2026-10-27 **Slash commands in managed sessions**: pi's built-in commands
   only work in its TUI, so `pi_commands.lua` intercepts them (and `!cmd`)
   and issues the matching RPC requests. pi's discovered commands are checked
@@ -215,6 +254,3 @@ the browser and jumps/scrolls to the line.
   interrupt on picker cancel.
 - Cross-session grep search (`:Conductor search`, `g/`).
 - Open chat in place, keeping the sidebar put.
-- External terminal backend + non-blocking session refresh.
-- Editable session browser with help cheatsheet (`g?`).
-- Initial codebase map created.

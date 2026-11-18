@@ -13,7 +13,10 @@ planned). See `CODEBASE_MAP.md` for the component map.
 - **Format**: `stylua lua/` (config in `.stylua.toml`)
 - **Try it in Neovim**: `:Conductor browse` (cwd sessions), `browse_all`,
   `sessions`, `here`, `panel`, `search`, `new`
-- No build step / test suite (Lua plugin).
+- No build step (Lua plugin).
+- **Tests** (headless, run from the repository root):
+  `nvim -u NONE -l tests/<name>_spec.lua` — `sidebar_width_details_spec`,
+  `todo_progress_spec`, `review_spec`. Each exits non-zero on failure.
 
 ## Architecture Notes
 
@@ -33,6 +36,25 @@ patterns that apply to all projects.
 
 ## Session Learnings
 <!-- Learnings captured by /learn command -->
+
+### 2026-11-18
+- **`winfixwidth` does not stop a window from being split.** Closing the
+  chat left the sidebar alone on its tab (full width); reopening the chat ran
+  `rightbelow vsplit` on it and halved it. Re-apply the width after the split
+  (`sidebar.apply_width()`); `wincmd =` / `VimResized` were not the cause.
+- **A `line_hl_group` text colour overrides inline highlights.** The active
+  row's `fg` repainted the `●` status light. Keep line highlights
+  background-only, colour the name with a separate span, and give the status
+  light a higher extmark priority (4200 > default 4096).
+- **Headless tests run at 80 columns.** Fractional widths then hit the
+  24-column minimum, which once truncated session names to nothing — set
+  `vim.o.columns` explicitly. Fake instances passed to `chatlog.open` need
+  `log = {}` and `partial = ''`.
+- **`nvim_win_set_cursor` on a non-current window does not fire
+  `CursorMoved`,** so `sidebar.reveal()` does not trip the sidebar's cursor
+  handler (which closes the details float).
+- **`grep -c` exits 1 when it counts zero matches** — not a failure when
+  checking that a test prints no `FAIL` lines.
 
 ### 2026-09-17
 - **Displayed "session time" was the file mtime, which a copy/move resets.**

@@ -1,4 +1,4 @@
 {
-  "timestamp": "2026-09-17T11:24:10Z",
-  "summary": "Copy/move-proof session times: browser reads created + last_activity from inside the session log (not file mtime); pi.list_sessions sorts by iso_to_epoch(last_activity) with mtime fallback; content header shows 'created X · updated Y · N msg'."
+  "timestamp": "2026-11-18T15:30:00Z",
+  "summary": "Sidebar redesign: 20% width re-applied after the chat split, icon+name rows, K details float (full first prompt, paths), background-only active-session highlight that keeps the status light colour; headless specs in tests/."
 }
