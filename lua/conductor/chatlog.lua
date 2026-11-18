@@ -419,6 +419,9 @@ function M.open(instance, opts)
     if vim.api.nvim_get_current_win() == sidebar_win then
       -- No neighbour to the right: carve one out.
       vim.cmd 'rightbelow vsplit'
+      -- The sidebar was alone on its tab (full width), so the split halved
+      -- it; shrink it back to its configured width.
+      require('conductor.sidebar').apply_width()
     end
     shell.log_win = vim.api.nvim_get_current_win()
   else

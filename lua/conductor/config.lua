@@ -21,8 +21,9 @@ local defaults = {
     preview_max_lines_per_entry = 20,
   },
   sidebar = {
-    ---Sidebar width in columns.
-    width = 36,
+    ---Sidebar width: a fraction of the editor width (0 < width < 1, e.g. 0.2
+    ---= 20%, at least 24 columns, kept on resize) or a column count (>= 1).
+    width = 0.2,
     ---Remember the live sessions list across Neovim restarts. Restored
     ---sessions start stopped (idle); the first prompt restarts the agent. A
     ---session can only be open in one running Neovim at a time.
@@ -109,6 +110,7 @@ local defaults = {
       kill = 'x', ---Kill / remove the instance.
       review = 'd', ---Review the session's changes in diffview (needs diffview.nvim).
       edit_changes = 'e', ---Open the session's folder in a new tab, changed files in the quickfix list.
+      details = 'K', ---Session details float: status, process, todo, changes, file path, folder, full first prompt (press again to focus it).
       next_session = 'j', ---Jump to the next session row.
       prev_session = 'k', ---Jump to the previous session row.
       close = 'q', ---Close the sidebar.

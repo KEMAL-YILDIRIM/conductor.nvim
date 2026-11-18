@@ -10,6 +10,9 @@ local M = {}
 ---@field instance_id integer|nil managed instance id
 ---@field external ConductorExternalSession|nil external (terminal) session
 ---@field first integer 1-based line of the row
+---@field status_label string|nil status word shown in the details float
+---@field todo { done: integer, total: integer }|nil todo progress
+---@field changes integer|nil changed files in the session folder (nil = unknown)
 
 local state = {
   bufnr = nil, ---@type integer|nil
@@ -21,7 +24,15 @@ local state = {
   ---Key of the selected row (follows the cursor).
   selected_key = nil, ---@type string|nil
   autocmd_id = nil, ---@type integer|nil
+  resize_autocmd_id = nil, ---@type integer|nil
   refresh_timer = nil, ---@type uv.uv_timer_t|nil
+}
+
+---The session-details float opened with `K`.
+local details = {
+  winid = nil, ---@type integer|nil
+  ---Sidebar line the float was opened for; moving off it closes the float.
+  line = nil, ---@type integer|nil
 }
 
 local led_icon = '●'
@@ -77,6 +88,35 @@ end
 ---@return boolean
 function M.is_window(window)
   return window ~= nil and window == state.winid and window_valid()
+end
+
+---Sidebar width in columns. `sidebar.width` is either a fraction of the
+---editor width (0 < width < 1, at least 24 columns) or a column count.
+---@return integer
+local function resolve_width()
+  local configured = require('conductor.config').options.sidebar.width
+  if type(configured) ~= 'number' or configured <= 0 then
+    return 36
+  end
+  if configured < 1 then
+    return math.max(24, math.floor(vim.o.columns * configured))
+  end
+  return math.floor(configured)
+end
+
+---Resize the sidebar window to its configured width (no-op when closed).
+function M.apply_width()
+  if window_valid() then
+    vim.api.nvim_win_set_width(state.winid, resolve_width())
+  end
+end
+
+local function close_details()
+  if details.winid and vim.api.nvim_win_is_valid(details.winid) then
+    vim.api.nvim_win_close(details.winid, true)
+  end
+  details.winid = nil
+  details.line = nil
 end
 
 ---Shorten `text` to at most `max_width` display cells, ending in '…'.
@@ -181,55 +221,40 @@ function M.render()
   end
   state.selected_key = selected
 
-  local width = window_valid() and vim.api.nvim_win_get_width(state.winid) or require('conductor.config').options.sidebar.width
+  local width = window_valid() and vim.api.nvim_win_get_width(state.winid) or resolve_width()
 
   local lines = { ' Conductor', '' }
   ---@type { line: integer, start_col: integer, end_col: integer, group: string }[]
   local spans = {}
-  ---@type { line: integer, text: string }[]
-  local status_marks = {}
   local section_lines = { 0 }
   state.rows = {}
   state.line_to_row = {}
 
-  ---Append a session header line: ' ● name' with a right-aligned status.
+  ---Append a session line: ' ● name'. Everything else (status, todo
+  ---progress, changes, paths, first prompt) lives in the `K` details float,
+  ---so the name gets the whole width.
   ---@param row ConductorSidebarRow
   ---@param name string
   ---@param status string
-  ---@param label string
-  local function add_header(row, name, status, label)
+  local function add_header(row, name, status)
     local prefix = ' ' .. led_icon .. ' '
-    local name_width = width - vim.fn.strdisplaywidth(prefix) - vim.fn.strdisplaywidth(label) - 2
+    local name_width = width - vim.fn.strdisplaywidth(prefix) - 1
     lines[#lines + 1] = prefix .. truncate(name, name_width)
     row.first = #lines
     spans[#spans + 1] = { line = #lines - 1, start_col = 1, end_col = 1 + #led_icon, group = status_led_groups[status] or 'ConductorLedExited' }
-    status_marks[#status_marks + 1] = { line = #lines - 1, text = label }
   end
 
-  ---' · N files' when the session's folder has changes, computed in the
-  ---background (see conductor.review); re-renders once a count changes.
+  ---Changed files in the session folder, counted in the background (see
+  ---conductor.review); re-renders once a count changes so the details float
+  ---reads a fresh value. nil while unknown.
   ---@param cwd string|nil
-  ---@return string
-  local function change_suffix(cwd)
-    local count = require('conductor.review').cached_count(cwd, function()
+  ---@return integer|nil
+  local function change_count(cwd)
+    return require('conductor.review').cached_count(cwd, function()
       if buffer_valid() then
         M.render()
       end
     end)
-    if count and count > 0 then
-      return (' · %d %s'):format(count, count == 1 and 'file' or 'files')
-    end
-    return ''
-  end
-
-  ---' · 3/7' when the session has a todo list (see the todo Pi extension).
-  ---@param todo { done: integer, total: integer }|nil
-  ---@return string
-  local function todo_suffix(todo)
-    if todo then
-      return (' · %d/%d'):format(todo.done, todo.total)
-    end
-    return ''
   end
 
   if #instances == 0 and #externals == 0 then
@@ -243,10 +268,15 @@ function M.render()
       section_lines[#section_lines + 1] = #lines - 1
       for _, instance in ipairs(instances) do
         ---@type ConductorSidebarRow
-        local row = { key = 'i:' .. instance.id, instance_id = instance.id, first = 0 }
-        add_header(row, instance.name, instance.status, require('conductor.statusline').status_label(instance)
-          .. todo_suffix(todo_by_session[supervisor.session_key(instance.session_path) or ''])
-          .. change_suffix(instance.cwd))
+        local row = {
+          key = 'i:' .. instance.id,
+          instance_id = instance.id,
+          first = 0,
+          status_label = require('conductor.statusline').status_label(instance),
+          todo = todo_by_session[supervisor.session_key(instance.session_path) or ''],
+          changes = change_count(instance.cwd),
+        }
+        add_header(row, instance.name, instance.status)
         state.rows[#state.rows + 1] = row
       end
     end
@@ -258,18 +288,20 @@ function M.render()
       section_lines[#section_lines + 1] = #lines - 1
       for _, external in ipairs(externals) do
         ---@type ConductorSidebarRow
-        local row = { key = 'e:' .. external.pid, external = external, first = 0 }
-        local label = ('%s · pid %d'):format(status_labels[external.status] or external.status, external.pid)
-          .. todo_suffix(external.todo)
-          .. change_suffix(external.cwd)
-        add_header(row, external.name, external.status, label)
+        local row = {
+          key = 'e:' .. external.pid,
+          external = external,
+          first = 0,
+          status_label = status_labels[external.status] or external.status,
+          todo = external.todo,
+          changes = change_count(external.cwd),
+        }
+        add_header(row, external.name, external.status)
         state.rows[#state.rows + 1] = row
       end
     end
     lines[#lines + 1] = ''
-    lines[#lines + 1] = ' <CR>: open chat  n: new'
-    lines[#lines + 1] = ' p: prompt  s: stop  x: kill  q: close'
-    lines[#lines + 1] = ' d: review diff  e: edit changes'
+    lines[#lines + 1] = ' K: details  g?: keys'
   end
 
   for _, row in ipairs(state.rows) do
@@ -286,12 +318,6 @@ function M.render()
   end
   for _, span in ipairs(spans) do
     vim.api.nvim_buf_set_extmark(state.bufnr, namespace, span.line, span.start_col, { end_col = span.end_col, hl_group = span.group })
-  end
-  for _, mark in ipairs(status_marks) do
-    vim.api.nvim_buf_set_extmark(state.bufnr, namespace, mark.line, 0, {
-      virt_text = { { mark.text, 'ConductorSidebarStatus' } },
-      virt_text_pos = 'right_align',
-    })
   end
 
   -- Put the cursor back on its session's row.
@@ -349,6 +375,119 @@ local function jump(direction)
       vim.cmd('normal! ' .. (direction > 0 and 'j' or 'k'))
     end
   end
+end
+
+---Float beside the sidebar with everything the row leaves out: status,
+---process, todo progress, changed files, full file path, folder and the full
+---first prompt. Pressing `K` again while it is open focuses it.
+---@param row ConductorSidebarRow
+local function show_details(row)
+  if details.winid and vim.api.nvim_win_is_valid(details.winid) then
+    vim.api.nvim_set_current_win(details.winid)
+    return
+  end
+
+  local name, cwd, path, process
+  if row.instance_id then
+    local instance = require('conductor.supervisor').instances[row.instance_id]
+    if not instance then
+      return
+    end
+    name, cwd, path = instance.name, instance.cwd, instance.session_path
+  elseif row.external then
+    name, cwd, path = row.external.name, row.external.cwd, row.external.session_file
+    process = ('pid %d · terminal'):format(row.external.pid)
+  else
+    return
+  end
+
+  local prompt
+  if path and vim.uv.fs_stat(path) then
+    local ok, meta = pcall(require('conductor.log_parser').scan_meta, path)
+    if ok and type(meta) == 'table' then
+      prompt = meta.first_user_text
+    end
+  end
+
+  local changes = '(not available)'
+  if row.changes then
+    changes = row.changes == 0 and 'none' or ('%d %s'):format(row.changes, row.changes == 1 and 'file' or 'files')
+  end
+  local fields = {
+    { 'Session', name or '?' },
+    { 'Status', row.status_label or '?' },
+    process and { 'Process', process } or nil,
+    row.todo and { 'Todo', ('%d/%d done'):format(row.todo.done, row.todo.total) } or nil,
+    { 'Changes', changes },
+    { 'File', path or '(no session file yet)' },
+    { 'Folder', cwd or '?' },
+  }
+  local lines = {}
+  local label_ends = {}
+  for index = 1, 7 do
+    local field = fields[index]
+    if field then
+      lines[#lines + 1] = ('%-9s %s'):format(field[1] .. ':', field[2])
+      label_ends[#lines] = #field[1] + 1
+    end
+  end
+  lines[#lines + 1] = ''
+  lines[#lines + 1] = 'First prompt:'
+  local prompt_heading = #lines
+  for _, line in ipairs(vim.split(prompt or '(no prompt yet)', '\n', { plain = true })) do
+    lines[#lines + 1] = (line:gsub('\r$', ''))
+  end
+
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.bo[bufnr].bufhidden = 'wipe'
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+  vim.bo[bufnr].modifiable = false
+  for line, end_col in pairs(label_ends) do
+    vim.api.nvim_buf_set_extmark(bufnr, namespace, line - 1, 0, { end_col = end_col, hl_group = 'ConductorSidebarSection' })
+  end
+  vim.api.nvim_buf_set_extmark(bufnr, namespace, prompt_heading - 1, 0, { end_col = #lines[prompt_heading], hl_group = 'ConductorSidebarSection' })
+
+  -- Beside the sidebar, level with the cursor row, wrapped to fit the screen.
+  local sidebar_width = vim.api.nvim_win_get_width(state.winid)
+  local position = vim.fn.win_screenpos(state.winid)
+  local widest = 0
+  for _, line in ipairs(lines) do
+    widest = math.max(widest, vim.fn.strdisplaywidth(line))
+  end
+  local width = math.max(20, math.min(widest, vim.o.columns - (position[2] - 1) - sidebar_width - 4))
+  local height = 0
+  for _, line in ipairs(lines) do
+    height = height + math.max(1, math.ceil(vim.fn.strdisplaywidth(line) / width))
+  end
+  height = math.max(1, math.min(height, vim.o.lines - 4))
+  local top = position[1] - 1 + vim.fn.winline() - 1
+  top = math.max(0, math.min(top, vim.o.lines - height - 4))
+
+  details.winid = vim.api.nvim_open_win(bufnr, false, {
+    relative = 'editor',
+    row = top,
+    col = position[2] - 1 + sidebar_width,
+    width = width,
+    height = height,
+    style = 'minimal',
+    border = 'rounded',
+    title = ' Session details ',
+  })
+  details.line = vim.api.nvim_win_get_cursor(state.winid)[1]
+  vim.wo[details.winid].wrap = true
+  vim.wo[details.winid].linebreak = true
+
+  for _, key in ipairs { 'q', '<Esc>', 'K' } do
+    vim.keymap.set('n', key, close_details, { buffer = bufnr, nowait = true, desc = 'Conductor: close session details' })
+  end
+  -- Leaving the focused float closes it.
+  vim.api.nvim_create_autocmd('WinLeave', {
+    buffer = bufnr,
+    once = true,
+    callback = function()
+      vim.schedule(close_details)
+    end,
+  })
 end
 
 local function setup_keymaps()
@@ -456,6 +595,13 @@ local function setup_keymaps()
     end
   end, vim.tbl_extend('force', options, { desc = 'Conductor: edit changed files in a new tab' }))
 
+  config.map('sidebar', 'details', 'n', function()
+    local row = row_at_cursor()
+    if row then
+      show_details(row)
+    end
+  end, vim.tbl_extend('force', options, { desc = 'Conductor: session details (full first prompt, file path)' }))
+
   config.map('sidebar', 'next_session', 'n', function()
     jump(1)
   end, vim.tbl_extend('force', options, { desc = 'Conductor: next session' }))
@@ -494,13 +640,17 @@ function M.open()
         if row then
           state.selected_key = row.key
         end
+        -- The details float belongs to one row; moving off it closes it.
+        if details.line and vim.api.nvim_win_get_cursor(state.winid)[1] ~= details.line then
+          close_details()
+        end
       end,
     })
   end
 
   -- Always open on a dedicated tab so the user's working tab is never split
   -- or resized: empty main window on the right, sidebar split off its left.
-  local width = require('conductor.config').options.sidebar.width
+  local width = resolve_width()
   require('conductor.tabs').open_dedicated()
   vim.cmd(('topleft %dvsplit'):format(width))
   state.winid = vim.api.nvim_get_current_win()
@@ -511,6 +661,15 @@ function M.open()
   vim.wo[state.winid].winfixwidth = true
   vim.wo[state.winid].wrap = false
   vim.wo[state.winid].cursorline = true
+
+  -- Keep a fractional width proportional when the editor is resized.
+  if not state.resize_autocmd_id then
+    state.resize_autocmd_id = vim.api.nvim_create_autocmd('VimResized', {
+      callback = function()
+        M.apply_width()
+      end,
+    })
+  end
 
   if not state.autocmd_id then
     state.autocmd_id = vim.api.nvim_create_autocmd('User', {
@@ -562,6 +721,7 @@ function M.open()
 end
 
 function M.close()
+  close_details()
   -- Tear down the dedicated tab when it holds only the sidebar (or the blank
   -- scratch); otherwise close just the sidebar window.
   local closed_tab = require('conductor.tabs').close_if_owned(state.winid, function(window)

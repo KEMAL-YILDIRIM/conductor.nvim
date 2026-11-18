@@ -211,7 +211,7 @@ require('conductor').setup {
     preview_max_lines_per_entry = 20,
   },
   sidebar = {
-    width = 36,
+    width = 0.2, -- fraction of the editor width (min 24 columns), or a column count
   },
   browser = {
     width = 44, -- session-list panel width
@@ -263,7 +263,7 @@ require('conductor').setup {
     },
     sidebar = {
       open_chat = '<CR>', prompt = 'p', new = 'n', stop = 's', kill = 'x', close = 'q',
-      review = 'd', edit_changes = 'e',
+      review = 'd', edit_changes = 'e', details = 'K', -- K: status, todo, changes, paths, full first prompt
     },
     chat = {
       focus_input = 'i', toggle_tool = '<CR>', next_tool = ']t', prev_tool = '[t',

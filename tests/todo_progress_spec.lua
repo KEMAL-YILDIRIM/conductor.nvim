@@ -19,18 +19,19 @@ local function check(condition, message)
   end
 end
 
--- No git folder, so the change count stays empty and only the todo suffix shows.
+-- No git folder, so the change count stays unknown and only the todo progress shows.
 local folder = vim.fs.normalize(vim.fn.tempname())
 vim.fn.mkdir(folder, 'p')
 
 local supervisor = require 'conductor.supervisor'
+local managed_instance = { id = 1, name = 'managed', status = 'idle', cwd = folder, session_path = 'managed.jsonl', handle = {} }
 supervisor.list = function()
-  return { { id = 1, name = 'managed', status = 'idle', cwd = folder, session_path = 'managed.jsonl', handle = {} } }
+  return { managed_instance }
 end
 supervisor.session_key = function(path)
   return path
 end
-supervisor.instances = {}
+supervisor.instances = { [1] = managed_instance }
 require('conductor.statusline').status_label = function()
   return 'idle'
 end
@@ -49,17 +50,32 @@ check(ok, 'sidebar opens' .. (ok and '' or (': ' .. tostring(open_error))))
 
 local buffer = vim.fn.bufnr 'conductor://sessions'
 local lines = vim.api.nvim_buf_get_lines(buffer, 0, -1, false)
-local labels = {}
-for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buffer, -1, 0, -1, { details = true })) do
-  local virtual_text = mark[4].virt_text
-  if virtual_text then
-    labels[vim.trim(lines[mark[2] + 1]):gsub('^●%s*', '')] = virtual_text[1][1]
+-- Rows hold only the status light and the name; progress lives in the K float.
+local sidebar_win = vim.fn.bufwinid(buffer)
+local todo_lines = {}
+for index, line in ipairs(lines) do
+  local name = line:match '^ ● (.+)$'
+  if name then
+    check(name == vim.trim(name) and not name:find('·', 1, true), 'row shows only icon and name (' .. name .. ')')
+    vim.api.nvim_set_current_win(sidebar_win)
+    vim.api.nvim_win_set_cursor(sidebar_win, { index, 0 })
+    vim.api.nvim_feedkeys('K', 'x', false)
+    for _, window in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      if vim.api.nvim_win_get_config(window).relative ~= '' then
+        for _, float_line in ipairs(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(window), 0, -1, false)) do
+          if float_line:match '^Todo:' then
+            todo_lines[name] = float_line
+          end
+        end
+        vim.api.nvim_win_close(window, true)
+      end
+    end
   end
 end
 
-check(labels.managed == 'idle · 2/5', 'managed session shows progress from its presence file (got ' .. tostring(labels.managed) .. ')')
-check(labels.tab and labels.tab:match ' · 3/7$', 'terminal session shows its progress (got ' .. tostring(labels.tab) .. ')')
-check(labels.plain and not labels.plain:match '%d+/%d+', 'session without a list shows no progress (got ' .. tostring(labels.plain) .. ')')
+check(todo_lines.managed == 'Todo:     2/5 done', 'managed session shows progress from its presence file (got ' .. tostring(todo_lines.managed) .. ')')
+check(todo_lines.tab == 'Todo:     3/7 done', 'terminal session shows its progress (got ' .. tostring(todo_lines.tab) .. ')')
+check(todo_lines.plain == nil, 'session without a list shows no progress (got ' .. tostring(todo_lines.plain) .. ')')
 
 local count = 0
 for _, line in ipairs(lines) do
